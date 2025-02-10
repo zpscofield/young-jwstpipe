@@ -18,52 +18,54 @@ with open('config.yaml', 'r') as config_file:
 os.environ['CRDS_PATH'] = config['crds_path']
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
-log_file_path = "pipeline.log"
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_stage3.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
 
-with open(log_file_path, 'a') as log_file:
-    log_file.write("\n------------------\n")
-    log_file.write("Stage 3 Processing\n")
-    log_file.write("------------------\n\n")
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
 
-# Main logger
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-file_handler = logging.FileHandler(log_file_path, mode='a')  # Append mode
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+    # Redirect CRDS logs
+    crds_log = logging.getLogger("CRDS")
+    crds_log.setLevel(logging.INFO)
+    crds_handler = logging.FileHandler(log_file_path, mode='a')
+    crds_handler.setFormatter(formatter)
+    crds_log.addHandler(crds_handler)
 
-# Redirect CRDS logs
-crds_log = logging.getLogger("CRDS")
-crds_log.setLevel(logging.INFO)
-crds_handler = logging.FileHandler(log_file_path, mode='a')
-crds_handler.setFormatter(formatter)
-crds_log.addHandler(crds_handler)
+    # Redirect stpipe logs
+    stpipe_log = logging.getLogger("stpipe")
+    stpipe_log.setLevel(logging.INFO)
+    stpipe_handler = logging.FileHandler(log_file_path, mode='a')
+    stpipe_handler.setFormatter(formatter)
+    stpipe_log.addHandler(stpipe_handler)
 
-# Redirect stpipe logs
-stpipe_log = logging.getLogger("stpipe")
-stpipe_log.setLevel(logging.INFO)
-stpipe_handler = logging.FileHandler(log_file_path, mode='a')
-stpipe_handler.setFormatter(formatter)
-stpipe_log.addHandler(stpipe_handler)
+    # Remove any StreamHandlers to prevent terminal output
+    for logger in [log, crds_log, stpipe_log]:
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                logger.removeHandler(handler)
 
-# Remove any StreamHandlers to prevent terminal output
-for logger in [log, crds_log, stpipe_log]:
-    for handler in logger.handlers:
-        if isinstance(handler, logging.StreamHandler):
-            logger.removeHandler(handler)
+    with open(log_file_path, 'a') as log_file:
+        log_file.write("\n------------------\n")
+        log_file.write("Stage 3 Processing\n")
+        log_file.write("------------------\n\n")
 
+    return log, log_file_path
 
 def get_filter_from_exposure(exp):
-    with fits.open(exp) as hdul:
-        filter = hdul[0].header['FILTER']
-    return filter
+    header = fits.getheader(exp, ext=0)  # Directly get the header from the primary HDU
+    return header['FILTER']
 
-import os
-import shutil
-
-def organize_exposures_by_filter(input_dir, output_base_dir):
+def organize_exposures_by_filter(input_dir, output_base_dir, log):
     files = [file for file in os.listdir(input_dir) if file.endswith('cal_final.fits')]
     if not files:
         log.info("No 'cal_final.fits' files found in the input directory. Exiting function.")
@@ -78,7 +80,7 @@ def organize_exposures_by_filter(input_dir, output_base_dir):
                 os.makedirs(filter_dir)
             new_filename = filename.replace('cal_final.fits', 'cal.fits')
             new_full_path = os.path.join(filter_dir, new_filename)
-            shutil.copy2(full_path, new_full_path)
+            shutil.move(full_path, new_full_path)
 
 def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, pupil="clear", subarray="full", exp_type="nrc_image"):
     """
@@ -157,10 +159,10 @@ def extract_resample_info(mosaic_img_path):
         }
     return resample_info
 
-def stage3(filter_dir, reference_catalog=None, resample_params=None):
+def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None):
 
-    target = config['target']
     output_dir = filter_dir + '/output_files'
+
     processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
     if os.path.exists(processed_file):
         log.info(f"Skipping processing for {filter_dir} as output already exists.")
@@ -194,6 +196,7 @@ def stage3(filter_dir, reference_catalog=None, resample_params=None):
     if resample_params:
         resample_config = {
             'resample': {
+                'kernel':config['res_kernel'],
                 'pixel_scale':config['pixel_scale'],
                 'pixfrac':config['pixfrac'],
                 'rotation':config['rotation'],
@@ -205,6 +208,7 @@ def stage3(filter_dir, reference_catalog=None, resample_params=None):
     if resample_params == None:
         resample_config = {
             'resample': {
+                'kernel':config['res_kernel'],
                 'pixel_scale':0.02,
                 'pixfrac':0.75,
                 'rotation':0.0,
@@ -243,10 +247,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Stage 1 of the JWST data reduction pipeline.')
     parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--input_dir', type=str, help='Directory where output will be written')
+    parser.add_argument('--target', type=str, help='Target name')
     args = parser.parse_args()
 
     input_dir = args.input_dir
     output_base_dir = args.output_dir
+    target = args.target
+    log, log_file_path = setup_logger(output_base_dir)
+
+    if not os.path.exists(output_base_dir):
+        os.makedirs(output_base_dir)
 
     filter_mapping = {
         'F090W': 90,
@@ -258,8 +268,7 @@ if __name__ == "__main__":
         'F410M': 410,
         'F444W': 444,
     }
-    
-    organize_exposures_by_filter(input_dir, output_base_dir)
+    organize_exposures_by_filter(input_dir, output_base_dir, log)
     filter_dirs = [os.path.join(output_base_dir, d) for d in os.listdir(output_base_dir) if os.path.isdir(os.path.join(output_base_dir, d))]
     filter_names = [os.path.basename(d) for d in filter_dirs]
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)
@@ -269,18 +278,17 @@ if __name__ == "__main__":
         if i == 0:
             if config['external_reference']:
                 ref_cat = config['reference_path']
-                stage3(dir, reference_catalog=ref_cat)
+                stage3(dir, log, target, reference_catalog=ref_cat)
             else:
                 log.info('NO REFERENCE CATALOG PROVIDED, USING GAIADR3')
-                stage3(dir)
+                stage3(dir, log, target)
         
             path_longest = dir + '/output_files/'
             convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
             long_cat = os.path.join(path_longest, f'{sorted_filters[0]}.csv')
-
             long_list = [file for file in os.listdir(path_longest) if file.endswith(f'nircam_clear-{sorted_filters[0]}_i2d.fits')]
             long_processed_file = os.path.join(path_longest, long_list[0])
             long_params = extract_resample_info(long_processed_file)
         
         else:
-            stage3(dir, reference_catalog=long_cat, resample_params=long_params)
+            stage3(dir, log, target, reference_catalog=long_cat, resample_params=long_params)

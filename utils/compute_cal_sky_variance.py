@@ -18,18 +18,15 @@ from astropy.stats import biweight_location, biweight_midvariance
 from dataclasses import dataclass
 from os import path
 import logging
+import yaml
+import os
 
-# Set up logging
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-log_file_path = 'pipeline.log' 
-file_handler = logging.FileHandler(log_file_path, mode='a') 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+with open('config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file)
 
 @dataclass
 class ScaledVariance:
+    log: logging.Logger
     block_size: int = 7
     mask_extension: int = 9
 
@@ -70,11 +67,11 @@ class ScaledVariance:
         self.masked_mean_var_rdnoise = self.masked_mean(self.var_rdnoise)
         self.correction_factor = self.skyvar / self.masked_mean_var_rdnoise
         self.predicted_skyvar = self.correction_factor * self.var_rdnoise
-        log.info(f"{self.fitsfile}")
-        log.info(f"Robust masked mean VAR_RDNOISE: {self.masked_mean_var_rdnoise}")
-        log.info(f"Robust masked mean SKY_VARIANCE: {self.skyvar}")
-        log.info(f"Correction factor: {self.correction_factor}")
-        log.info(f"Fraction of pixels unmasked: {self.unmasked_frac}")
+        self.log.info(f"{self.fitsfile}")
+        self.log.info(f"Robust masked mean VAR_RDNOISE: {self.masked_mean_var_rdnoise}")
+        self.log.info(f"Robust masked mean SKY_VARIANCE: {self.skyvar}")
+        self.log.info(f"Correction factor: {self.correction_factor}")
+        self.log.info(f"Fraction of pixels unmasked: {self.unmasked_frac}")
         
     def write_file(self):
         prefix = self.fitsfile[:self.fitsfile.rfind('_')] # replace last suffix 

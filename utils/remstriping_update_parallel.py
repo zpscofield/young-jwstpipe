@@ -34,38 +34,46 @@ with open('config.yaml', 'r') as config_file:
 os.environ['CRDS_PATH'] = config['crds_path']
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_fnoise.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
 
-log_file_path = 'pipeline.log'
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
 
-with open(log_file_path, 'a') as log_file:
-    log_file.write("\n-----------------\n")
-    log_file.write("1/f Noise Removal\n")
-    log_file.write("-----------------\n\n")
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
 
-file_handler = logging.FileHandler(log_file_path, mode='a')
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+    with open(log_file_path, 'a') as log_file:
+        log_file.write("\n-----------------\n")
+        log_file.write("1/f Noise Removal\n")
+        log_file.write("-----------------\n\n")
 
-crds_log = logging.getLogger("CRDS")
-crds_log.setLevel(logging.INFO)
-crds_handler = logging.FileHandler(log_file_path, mode='a')
-crds_handler.setFormatter(formatter)
-crds_log.addHandler(crds_handler)
-for handler in crds_log.handlers: 
-    if isinstance(handler, logging.StreamHandler):
-        crds_log.removeHandler(handler)
+    crds_log = logging.getLogger("CRDS")
+    crds_log.setLevel(logging.INFO)
+    crds_handler = logging.FileHandler(log_file_path, mode='a')
+    crds_handler.setFormatter(formatter)
+    crds_log.addHandler(crds_handler)
+    for handler in crds_log.handlers: 
+        if isinstance(handler, logging.StreamHandler):
+            crds_log.removeHandler(handler)
 
-stpipe_log = logging.getLogger("stpipe")
-stpipe_log.setLevel(logging.INFO) 
-stpipe_handler = logging.FileHandler(log_file_path, mode='a')
-stpipe_handler.setFormatter(formatter)
-stpipe_log.addHandler(stpipe_handler)
-for handler in stpipe_log.handlers:
-    if isinstance(handler, logging.StreamHandler):
-        stpipe_log.removeHandler(handler)
+    stpipe_log = logging.getLogger("stpipe")
+    stpipe_log.setLevel(logging.INFO) 
+    stpipe_handler = logging.FileHandler(log_file_path, mode='a')
+    stpipe_handler.setFormatter(formatter)
+    stpipe_log.addHandler(stpipe_handler)
+    for handler in stpipe_log.handlers:
+        if isinstance(handler, logging.StreamHandler):
+            stpipe_log.removeHandler(handler)
+
+    return log, log_file_path
         
 MASKTHRESH = 0.8
 
@@ -118,7 +126,7 @@ def collapse_image(im, mask, dimension='y', sig=2.):
                                              stdfunc='std', axis=0)
     return res[1]
 
-def masksources(image, output_dir):
+def masksources(log, image, output_dir):
     """Detect sources in an image using a tiered approach for different source sizes."""
     model = ImageModel(image)
     sci = model.data
@@ -196,9 +204,9 @@ def measure_fullimage_striping(fitdata, mask):
     vertical_striping = collapse_image(temp_image2, mask, dimension='x')
     return horizontal_striping, vertical_striping
 
-def measure_striping(image, origfilename, output_dir, thresh=None, apply_flat=True, mask_sources=True, save_patterns=False, flat_file=None):
+def measure_striping(log, image, origfilename, output_dir, thresh=None, apply_flat=True, mask_sources=True, save_patterns=False, flat_file=None):
     """Removes striping in rate.fits files before flat fielding."""
-    
+
     if thresh is None:
         thresh = MASKTHRESH
 
@@ -229,7 +237,7 @@ def measure_striping(image, origfilename, output_dir, thresh=None, apply_flat=Tr
             seg = fits.getdata(srcmask)
         else:
             log.info('Detecting sources to mask out source flux')
-            seg = masksources(image, output_dir)
+            seg = masksources(log, image, output_dir)
         wobj = np.where(seg > 0)
         mask[wobj] = True
 
@@ -264,14 +272,33 @@ def measure_striping(image, origfilename, output_dir, thresh=None, apply_flat=Tr
             if nmask[i] > (ampmask.shape[1] * thresh):
                 horizontal_striping[i, colstart:colstop] = full_horizontal[i]
                 ampcount += 1
+            elif (hstriping_amp[i] > 2 * (np.nanstd(full_horizontal))):
+                horizontal_striping[i, colstart:colstop] = full_horizontal[i]
             else:
                 horizontal_striping[i, colstart:colstop] = hstriping_amp[i]
-                if hstriping_amp[i] > 2 * (np.nanstd(full_horizontal)):
-                    horizontal_striping[i, colstart:colstop] = full_horizontal[i]
         ampcounts.append('%s-%i' % (amp, ampcount))
 
     ampinfo = ', '.join(ampcounts)
     log.info('%s, full row medians used: %s /%i' % (os.path.basename(image), ampinfo, rowstop-rowstart))
+
+    log.info('%s, checking for any problematic amplifier medians...')
+    # for i in range(horizontal_striping.shape[0]):  # Loop through rows
+    #     amp_values = [] 
+    #     amp_columns = []
+
+    #     for amp in ['A', 'B', 'C', 'D']:
+    #         _, _, colstart, colstop = NIR_amps[amp]['data']
+    #         amp_median = np.nanmedian(horizontal_striping[i, colstart:colstop])
+    #         amp_values.append(amp_median)
+    #         amp_columns.append((colstart, colstop))
+
+    #     # Identify overestimated amplifier values
+    #     for j, amp_value in enumerate(amp_values):
+    #         if amp_value > (2 * np.nanstd(full_horizontal)): 
+    #             other_values = np.delete(amp_values, j) 
+    #             replacement_value = np.nanmin(other_values)
+    #             colstart, colstop = amp_columns[j]
+    #             horizontal_striping[i, colstart:colstop] = replacement_value
 
     temp_sub = model.data - horizontal_striping
     vstriping = collapse_image(temp_sub, mask, dimension='x')
@@ -329,7 +356,8 @@ def measure_striping(image, origfilename, output_dir, thresh=None, apply_flat=Tr
             else:
                 log.error("Temporary file not found after save operation")
 
-def cleanup_intermediate_files(output_dir, image_filename):
+def cleanup_intermediate_files(log, output_dir, image_filename):
+    log, log_file_path = setup_logger(output_dir)
     base_filename = os.path.basename(image_filename).replace('rate.fits', '')
     intermediate_files = [
         os.path.join(output_dir, base_filename + 'rate_pre1f.fits'),
@@ -345,9 +373,9 @@ def cleanup_intermediate_files(output_dir, image_filename):
                 log.error(f"Error deleting file: {file}, {e}")
 
 def process_file(args):
-    image, pre1f, output_dir, thresh, apply_flat, mask_sources, save_patterns, flat_file = args
-    measure_striping(image, pre1f, output_dir, thresh=thresh, apply_flat=apply_flat, mask_sources=mask_sources, save_patterns=save_patterns, flat_file=flat_file)
-    cleanup_intermediate_files(output_dir, image)
+    image, pre1f, output_dir, thresh, apply_flat, mask_sources, save_patterns, flat_file, log = args
+    measure_striping(log, image, pre1f, output_dir, thresh=thresh, apply_flat=apply_flat, mask_sources=mask_sources, save_patterns=save_patterns, flat_file=flat_file)
+    cleanup_intermediate_files(log, output_dir, image)
 
 def main():
     parser = argparse.ArgumentParser(description='Measure and remove horizontal and vertical striping pattern (1/f noise) from rate file')
@@ -355,6 +383,8 @@ def main():
     parser.add_argument('--output_dir', type=str, default='./', help='Directory where rate images are stored and output will be written')
     parser.add_argument('--thresh', type=float, help='The threshold (fraction of masked pixels in an amp-row) above which to switch to a full-row median')
     parser.add_argument('--save_patterns', action='store_true', help='Save the horizontal and vertical striping patterns as FITS files')
+    parser.add_argument('--nproc', type=int, default=cpu_count() // 2,
+                        help='Number of parallel processes to use (default: half of available cores)')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--runone', type=str, help='Filename of single file to clean. Overrides the runall argument')
     group.add_argument('--runall', action='store_true', help='Set to run all *rate.fits images in the output_dir directory.')
@@ -362,6 +392,8 @@ def main():
     parser.add_argument('--apply_flat', dest='apply_flat', action=argparse.BooleanOptionalAction, required=False, default=True)
     parser.add_argument('--mask_sources', dest='mask_sources', action=argparse.BooleanOptionalAction, required=False, default=True)
     args = parser.parse_args()
+
+    log, log_file_path = setup_logger(args.output_dir)
 
     if args.runone:
         images = [os.path.join(args.output_dir, args.runone)]
@@ -391,11 +423,12 @@ def main():
 
     if args.runone:
         pre1f = images[0].replace('rate.fits', 'rate_pre1f.fits')
-        measure_striping(images[0], pre1f, args.output_dir, thresh=args.thresh, apply_flat=args.apply_flat, mask_sources=args.mask_sources, save_patterns=args.save_patterns, flat_file=flats_dict[images[0]])
-        cleanup_intermediate_files(args.output_dir, args.runone)
+        measure_striping(log, images[0], pre1f, args.output_dir, thresh=args.thresh, apply_flat=args.apply_flat, mask_sources=args.mask_sources, save_patterns=args.save_patterns, flat_file=flats_dict[images[0]])
+        cleanup_intermediate_files(log, args.output_dir, args.runone)
     elif args.runall:
-        pool_args = [(rate, rate.replace('rate.fits', 'rate_pre1f.fits'), args.output_dir, args.thresh, args.apply_flat, args.mask_sources, args.save_patterns, flats_dict[rate]) for rate in images]
-        with Pool(processes=cpu_count()) as pool:
+        pool_args = [(rate, rate.replace('rate.fits', 'rate_pre1f.fits'), args.output_dir, args.thresh, args.apply_flat, args.mask_sources, args.save_patterns, flats_dict[rate], log) for rate in images]
+        effective_nproc = min(args.nproc, len(pool_args))
+        with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(pool_args), file=sys.stdout) as pbar:
                 for _ in pool.imap_unordered(process_file, pool_args):
                     pbar.update(1)

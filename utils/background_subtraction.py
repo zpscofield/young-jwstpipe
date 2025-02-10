@@ -36,23 +36,48 @@ from astropy.convolution import (
     Ring2DKernel, Gaussian2DKernel)
 from scipy.ndimage import median_filter
 from astropy.wcs import WCS
-
+import yaml
+import os
 #import dill # Just for debugging
 
 # Set up logging
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-log_file_path = 'pipeline.log' 
-file_handler = logging.FileHandler(log_file_path, mode='a') 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+
+with open('config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file)
+
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_bkg.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
+
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
+
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
+
+    stpipe_log = logging.getLogger("stpipe")
+    stpipe_log.setLevel(logging.INFO)
+    stpipe_handler = logging.FileHandler(log_file_path, mode='a')
+    stpipe_handler.setFormatter(formatter)
+    stpipe_log.addHandler(stpipe_handler)
+    for handler in stpipe_log.handlers: 
+        if isinstance(handler, logging.StreamHandler):
+            stpipe_log.removeHandler(handler)
+
+    return log, log_file_path
 
 # If datamodels are used to allow selecting DQ flags by name
 from jwst.datamodels import dqflags 
 
 @dataclass
 class SubtractBackground:
+    log: logging.Logger
     tier_nsigma: list = (1.5, 1.5, 1.5, 1.5)
     tier_npixels = list = (15, 10, 3, 1)
     tier_kernel_size: list = (25, 15, 5, 2)
@@ -87,7 +112,7 @@ class SubtractBackground:
                     if h.header['EXTNAME'] == 'DQ':
                         self.has_dq = True
                         self.dq = h.data
-                        log.info(f"{fitsfile} has a DQ array")
+                        self.log.info(f"{fitsfile} has a DQ array")
         return sci,err
     
     # Convenience routine for inspecting the background and mask
@@ -138,7 +163,7 @@ class SubtractBackground:
             self.dqmask = self.dqmask | (np.bitwise_and(self.dq,flagbit) != 0)
     
     def ring_median_filter(self, sci, mask):
-        log.info(f"Ring median filtering with radius, width = {self.ring_radius_in}, {self.ring_width}")
+        self.log.info(f"Ring median filtering with radius, width = {self.ring_radius_in}, {self.ring_width}")
         sci_filled = self.replace_masked(sci,mask)
         ring = Ring2DKernel(self.ring_radius_in, self.ring_width)
         filtered = median_filter(sci, footprint=ring.array)
@@ -160,7 +185,7 @@ class SubtractBackground:
         ceiling = self.ring_clip_max_sigma * background_rms + bkg.background
         # Pixels above the ceiling are masked before doing the ring-median filtering
         ceiling_mask = sci > ceiling
-        log.info(f"Ring median filtering with radius, width = {self.ring_radius_in}, {self.ring_width}")
+        self.log.info(f"Ring median filtering with radius, width = {self.ring_radius_in}, {self.ring_width}")
         sci_filled = self.replace_masked(sci,mask | ceiling_mask)
         ring = Ring2DKernel(self.ring_radius_in, self.ring_width)
         filtered = median_filter(sci_filled, footprint=ring.array)
@@ -183,13 +208,13 @@ class SubtractBackground:
         else:
             footprint = circular_footprint(radius=self.tier_dilate_size[tiernum])
             mask = segm.make_source_mask(footprint=footprint)
-        log.info(f"Tier #{tiernum}:")
-        log.info(f"  kernel_size = {self.tier_kernel_size[tiernum]}")
-        log.info(f"  tier_nsigma = {self.tier_nsigma[tiernum]}")
-        log.info(f"  tier_npixels = {self.tier_npixels[tiernum]}")
-        log.info(f"  tier_dilate_size = {self.tier_dilate_size[tiernum]}")
-        log.info(f"  median of ring-median-filtered image = {np.nanmedian(img)}")
-        log.info(f"  biweight rms of ring-median-filtered image  = {background_rms}")
+        self.log.info(f"Tier #{tiernum}:")
+        self.log.info(f"  kernel_size = {self.tier_kernel_size[tiernum]}")
+        self.log.info(f"  tier_nsigma = {self.tier_nsigma[tiernum]}")
+        self.log.info(f"  tier_npixels = {self.tier_npixels[tiernum]}")
+        self.log.info(f"  tier_dilate_size = {self.tier_dilate_size[tiernum]}")
+        self.log.info(f"  median of ring-median-filtered image = {np.nanmedian(img)}")
+        self.log.info(f"  biweight rms of ring-median-filtered image  = {background_rms}")
         # For debugging #####################################################################
         # dill.dump(convolved_difference,open(f"convolved_difference{tiernum}.pkl","wb"))
         # dill.dump(img,open(f"bkgsub_img{tiernum}.pkl","wb"))
@@ -201,7 +226,7 @@ class SubtractBackground:
         ''' Iteratively mask sources 
             Wtarting_bit lets you add bits for these masks to an existing bitmask
         '''
-        log.info(f"ring-filtered background median: {np.nanmedian(img)}")
+        self.log.info(f"ring-filtered background median: {np.nanmedian(img)}")
         first_mask = bitmask != 0
         for tiernum in range(len(self.tier_nsigma)):
             mask = self.tier_mask(img, first_mask, tiernum=tiernum)
@@ -244,15 +269,15 @@ class SubtractBackground:
         diff = mean_masked - mean_unmasked
         significance = diff/np.sqrt(stderr_masked**2 + stderr_unmasked**2)
         
-        log.info(f"Mean under masked pixels   = {mean_masked:.4f} +- {stderr_masked:.4f}")
-        log.info(f"Mean under unmasked pixels = "
+        self.log.info(f"Mean under masked pixels   = {mean_masked:.4f} +- {stderr_masked:.4f}")
+        self.log.info(f"Mean under unmasked pixels = "
               f"{mean_unmasked:.4f} +- {stderr_unmasked:.4f}")
-        log.info(f"Difference = {diff:.4f} at {significance:.2f} sigma significance")
+        self.log.info(f"Difference = {diff:.4f} at {significance:.2f} sigma significance")
     
     # Customize the parameters for the different steps here
     def do_background_subtraction(self,datadir,fitsfile):
         # Background subtract all the bands
-        log.info(fitsfile)
+        self.log.info(fitsfile)
         sci, err = self.open_file(datadir,fitsfile)
 
         # Set up a bitmask
@@ -289,9 +314,9 @@ class SubtractBackground:
         bkgd_subtracted = sci-bkgd
 
         # Evaluate
-        log.info("Bias under bright sources:")
+        self.log.info("Bias under bright sources:")
         self.evaluate_bias(bkgd,err,mask) # Under all the sources
-        log.info("\nBias under fainter sources")
+        self.log.info("\nBias under fainter sources")
         faintmask = np.zeros(sci.shape,bool)
         for t in self.faint_tiers_for_evaluation:
             faintmask = faintmask | (np.bitwise_and(bitmask,2**t) != 0)
@@ -316,5 +341,5 @@ class SubtractBackground:
         hdu.append(newhdu)
         # Write out the new FITS file
         hdu.writeto(outpath,overwrite=True)
-        log.info(f"Writing out {outpath}")
-        log.info("")
+        self.log.info(f"Writing out {outpath}")
+        self.log.info("")

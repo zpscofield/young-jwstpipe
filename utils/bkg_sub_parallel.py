@@ -20,30 +20,42 @@ import argparse
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
-# Set up logging
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_bkg.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
 
-log_file_path = 'pipeline.log' 
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
 
-with open(log_file_path, 'a') as log_file:
-    log_file.write("\n----------------------\n")
-    log_file.write("Background Subtraction\n")
-    log_file.write("----------------------\n\n")
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
 
-file_handler = logging.FileHandler(log_file_path, mode='a')  # 'a' for append mode, 'w' for write mode
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+    stpipe_log = logging.getLogger("stpipe")
+    stpipe_log.setLevel(logging.INFO)
+    stpipe_handler = logging.FileHandler(log_file_path, mode='a')
+    stpipe_handler.setFormatter(formatter)
+    stpipe_log.addHandler(stpipe_handler)
+    for handler in stpipe_log.handlers: 
+        if isinstance(handler, logging.StreamHandler):
+            stpipe_log.removeHandler(handler)
 
-stpipe_log = logging.getLogger("stpipe")
-stpipe_log.setLevel(logging.INFO)
-stpipe_handler = logging.FileHandler(log_file_path, mode='a')
-stpipe_handler.setFormatter(formatter)
-stpipe_log.addHandler(stpipe_handler)
-for handler in stpipe_log.handlers: 
-    if isinstance(handler, logging.StreamHandler):
-        stpipe_log.removeHandler(handler)
+    with open(log_file_path, 'a') as log_file:
+        log_file.write("\n----------------------\n")
+        log_file.write("Background Subtraction\n")
+        log_file.write("----------------------\n\n")
+
+    return log, log_file_path
+
+def log_error(log, message, exc=None):
+    log.error(message)
+    if exc is not None:
+        log.exception(exc)  # This logs the exception traceback
 
 def gaussian(x, a, mu, sig):
     return a * np.exp(-(x-mu)**2/(2*sig**2))
@@ -63,7 +75,7 @@ def fit_sky(data, plot_sky=False, ax=None, color='C1', label=None, **kwargs):
 
     return popt[1]
 
-def bkgsub(directory, img, output_dir, plot_sky=False):
+def bkgsub(directory, img, log, output_dir, plot_sky=False):
     img_path = os.path.join(directory, img)
     
     # Check if the file exists
@@ -73,7 +85,7 @@ def bkgsub(directory, img, output_dir, plot_sky=False):
     
     bkg_suffix = 'bkgsub1'
     file_suffix = 'final'
-    bs = background_subtraction.SubtractBackground()
+    bs = background_subtraction.SubtractBackground(log=log)
     bs.suffix = bkg_suffix
     bs.replace_sci = True
     bs.do_background_subtraction(directory, img)
@@ -155,7 +167,7 @@ def bkgsub(directory, img, output_dir, plot_sky=False):
     ### rescale variance maps
     log.info('%s rescaling readnoise variance' % img)
     # Instantiate the SubtractBackground object. Set the output suffix
-    sv = compute_cal_sky_variance.ScaledVariance()
+    sv = compute_cal_sky_variance.ScaledVariance(log=log)
 
     # Print out the parameters being used
     log.info("ScaledVariance parameters:\n%s", pprint.pformat(sv.__dict__))
@@ -197,7 +209,7 @@ def bkgsub(directory, img, output_dir, plot_sky=False):
 
     log.info('finished: %s' % img)
 
-def cleanup_intermediate_files(output_dir, image_filename):
+def cleanup_intermediate_files(output_dir, image_filename, log):
     base_filename = os.path.basename(image_filename).replace('_cal_final.fits', '')
     intermediate_files = [
         os.path.join(output_dir, base_filename + '_cal_bkgsub1.fits'),
@@ -212,27 +224,36 @@ def cleanup_intermediate_files(output_dir, image_filename):
                 log.error(f"Error deleting file: {file}, {e}")
 
 def process_file(args):
-    directory, output_dir, img, plot_sky = args
-    bkgsub(directory, img, output_dir, plot_sky)
-    cleanup_intermediate_files(directory, img)
+    directory, output_dir, img, plot_sky, log, log_file_path = args
+    try:
+        bkgsub(directory, img, log, output_dir, plot_sky)
+        cleanup_intermediate_files(directory, img, log)
+    except Exception as e:
+        log_error(log, f"Error in process_file for {img}", exc=e)
+        with open(log_file_path, "a") as f:
+            f.write(f"{img}: {e}\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Stage 1 of the JWST data reduction pipeline.')
     parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--input_dir', type=str, help='Directory where input is located')
+    parser.add_argument('--nproc', type=int, default=cpu_count() // 2,
+                        help='Number of parallel processes to use (default: half of available cores)')
     args = parser.parse_args()
 
+    log, log_file_path = setup_logger(args.output_dir)
     path = args.input_dir
     output_dir = args.output_dir
     img_file_list = os.listdir(path)
     img_list = [file for file in img_file_list if file.endswith('cal_final.fits')]
     img_list = np.sort(img_list)
 
-    pool_args = [(path, output_dir, img, config['plot_sky']) for img in img_list]
+    pool_args = [(path, output_dir, img, config['plot_sky'], log, log_file_path) for img in img_list]
 
     log.info("Starting multiprocessing for background subtraction...")
-    with Pool(processes=cpu_count()) as pool:
+    effective_nproc = min(args.nproc, len(pool_args))
+    with Pool(processes=effective_nproc) as pool:
         with tqdm(total=len(pool_args), file=sys.stdout) as pbar:
             for result in pool.imap_unordered(process_file, pool_args):
                 pbar.update(1) 

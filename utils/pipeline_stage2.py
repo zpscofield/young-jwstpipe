@@ -1,5 +1,4 @@
 import os
-# import json
 import yaml
 import numpy as np
 from jwst.pipeline import Image2Pipeline
@@ -8,6 +7,7 @@ import sys
 from tqdm.auto import tqdm
 from multiprocessing import current_process
 import argparse
+from mpi4py import MPI
 
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
@@ -15,17 +15,23 @@ with open('config.yaml', 'r') as config_file:
 os.environ['CRDS_PATH'] = config['crds_path']
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
-log_file_path = "pipeline.log"
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
 
-with open(log_file_path, 'a') as log_file:
-    log_file.write("\n------------------\n")
-    log_file.write("Stage 2 Processing\n")
-    log_file.write("------------------\n\n")
+obs_path = config['target']
+log_file_path = os.path.join(obs_path, "pipeline.log")
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
+formatter = logging.Formatter(f'%(asctime)s - Rank {rank} - %(name)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
+
+if rank == 0:
+    with open(log_file_path, 'a') as log_file:
+        log_file.write("\n------------------\n")
+        log_file.write("Stage 2 Processing\n")
+        log_file.write("------------------\n\n")
+
 file_handler = logging.FileHandler(log_file_path, mode='a')  # Append mode
 file_handler.setFormatter(formatter)
 log.addHandler(file_handler)
@@ -47,10 +53,18 @@ for logger in [log, crds_log, stpipe_log]:
         if isinstance(handler, logging.StreamHandler):
             logger.removeHandler(handler)
 
-def stage2(rate, output_dir):
+def split_jobs(img_list):
+    img_count = len(img_list)
+    img_per_process = img_count//size
+    start = rank * img_per_process
+    end = start + img_per_process if rank != size - 1 else img_count
+    img_set = img_list[start:end]
+    return img_set
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+def stage2(rate, output_dir):
+    if rank == 0:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
     result = Image2Pipeline.call(
         rate, 
@@ -69,5 +83,17 @@ if __name__=="__main__":
     file_list = os.listdir(path)
     rate_list = [file for file in file_list if file.endswith('rate.fits')]
     rate_list = np.sort(rate_list)
-    for i, rate in enumerate(tqdm(rate_list, file=sys.stderr)):
+    total_files = len(rate_list)
+    rate_set = split_jobs(rate_list)
+
+    if rank == 0:
+        set_length = len(rate_set)
+        print(f'Number of processes: {size}')
+        print(f'Files to process for root process: {set_length}')
+
+    for i, rate in enumerate(tqdm(rate_set, file=sys.stderr, disable=(rank != 0))):
         stage2(os.path.join(path, rate), args.output_dir)
+
+    log.info(f"Rank {rank} has finished processing.")
+    comm.Barrier()
+    MPI.Finalize()

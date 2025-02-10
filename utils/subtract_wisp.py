@@ -35,6 +35,7 @@ Notes
 """
 import logging
 import argparse
+import yaml
 from functools import partial
 #import multiprocessing
 from multiprocessing import Pool
@@ -45,6 +46,7 @@ warnings.filterwarnings('ignore', message="Input data contains invalid values*")
 warnings.filterwarnings('ignore', message="All-NaN slice encountered*")
 warnings.filterwarnings('ignore', message="'obsfix' made the change*")  # from astropy wcs during lw segmap blotting
 warnings.filterwarnings('ignore', message="'datfix' made the change*")  # from astropy wcs during lw segmap blotting
+warnings.filterwarnings('ignore', message="nan_treatment='interpolate', however, NaN values detected post convolution.*")
 
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
@@ -58,24 +60,35 @@ from photutils.segmentation import detect_sources, detect_threshold
 from scipy.ndimage import binary_dilation, generate_binary_structure
 from tqdm.auto import tqdm
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+with open('config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file)
 
-log_file_path = 'pipeline.log'
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_wisp.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
 
-with open(log_file_path, 'a') as log_file:
-    log_file.write("\n----------------\n")
-    log_file.write("Wisp subtraction\n")
-    log_file.write("----------------\n\n")
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
 
-file_handler = logging.FileHandler(log_file_path, mode='a')
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
+
+    with open(log_file_path, 'a') as log_file:
+        log_file.write("\n----------------\n")
+        log_file.write("Wisp subtraction\n")
+        log_file.write("----------------\n\n")
+
+    return log, log_file_path
 
 # -----------------------------------------------------------------------------
 
-def make_segmap(f, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5, save_segmap=False):
+def make_segmap(f, log, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5, save_segmap=False):
     """
     Make a segmentation map for the input file.
     
@@ -121,12 +134,18 @@ def make_segmap(f, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5, sav
     detector = os.path.basename(f).split('_')[-2].lower()
     f_sw = f.replace('_rate.fits', '_cal.fits')
     if (seg_from_lw) & ('long' not in detector):
-        if 'a' in detector:
-            f_lw = f.replace(detector.lower(), 'nrcalong').replace('_rate.fits', '_cal.fits')
-        if 'b' in detector:
-            f_lw = f.replace(detector.lower(), 'nrcblong').replace('_rate.fits', '_cal.fits')
-        data = fits.getdata(f_lw, 'SCI')
-        dq = fits.getdata(f_lw, 'DQ')
+        try:
+            if 'a' in detector:
+                f_lw = f.replace(detector.lower(), 'nrcalong').replace('_rate.fits', '_cal.fits')
+            if 'b' in detector:
+                f_lw = f.replace(detector.lower(), 'nrcblong').replace('_rate.fits', '_cal.fits')
+            data = fits.getdata(f_lw, 'SCI')
+            dq = fits.getdata(f_lw, 'DQ')
+            log.info(f"Using long-wavelength file for segmentation: {f_lw}")
+        except:
+            log.warning(f"Long-wavelength file not found for {f}. Falling back to short-wavelength file.")
+            data = fits.getdata(f_sw, 'SCI')
+            dq = fits.getdata(f_sw, 'DQ')
     else:
         data = fits.getdata(f_sw, 'SCI')
         dq = fits.getdata(f_sw, 'DQ')
@@ -168,7 +187,7 @@ def make_segmap(f, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5, sav
 
 # -----------------------------------------------------------------------------
 
-def process_file(f, wisp_dir='./', create_segmap=True, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5,
+def process_file(log, f, output_dir, wisp_dir='./', create_segmap=True, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5,
                  save_segmap=False, sub_wisp=True, gauss_smooth_wisp=False, gauss_stddev=3.0, scale_wisp=True,
                  scale_method='mad', poly_degree=5, factor_min=0.0, factor_max=2.0, factor_step=0.01, min_wisp=None, 
                  flag_wisp_thresh=None, dq_val=1, correct_rows=True, correct_cols=False, save_data=True, save_model=True, 
@@ -198,7 +217,7 @@ def process_file(f, wisp_dir='./', create_segmap=True, seg_from_lw=True, sigma=0
 
     # Make the segmentation map
     if create_segmap:
-        segmap_data = make_segmap(f, seg_from_lw=seg_from_lw, sigma=sigma, npixels=npixels, 
+        segmap_data = make_segmap(f, log, seg_from_lw=seg_from_lw, sigma=sigma, npixels=npixels, 
                                   dilate_segmap=dilate_segmap, save_segmap=save_segmap)
     else:
         segmap_data = np.zeros(wisp_data.shape).astype(int)
@@ -215,7 +234,7 @@ def process_file(f, wisp_dir='./', create_segmap=True, seg_from_lw=True, sigma=0
 
 # -----------------------------------------------------------------------------
 
-def process_files(files, nproc=6, **kwargs):
+def process_files(log, files, nproc, **kwargs):
     """"Wrapper around the process_file() function to allow for multiprocessing."""
 
     # Remove any files that are not in a detector impacted by wisps
@@ -223,9 +242,9 @@ def process_files(files, nproc=6, **kwargs):
     non_relevant_files = [f for f in files if f not in relevant_files]
     log.info('Found {} relevant input files.'.format(len(relevant_files)))
     log.info('Found {} non-relevant input files.'.format(len(non_relevant_files)))
-    
-    process_file_partial = partial(process_file, **kwargs)
-    with Pool(processes=nproc) as pool:
+    process_file_partial = partial(process_file, log, **kwargs)
+    effective_nproc = min(nproc, len(relevant_files))
+    with Pool(processes=effective_nproc) as pool:
         with tqdm(total=len(relevant_files), file=sys.stdout) as pbar:
             for _ in pool.imap_unordered(process_file_partial, relevant_files):
                 pbar.update(1)
@@ -538,11 +557,13 @@ def parse_args():
     nproc_help = 'The number of processes to use during multiprocessing.'
     wisp_dir_help = 'The directory containing the wisp templates. The templates are assumed to have the form WISP_{DETECTOR}_{FILTER}_{PUPIL}.fits.'
     create_segmap_help = 'Option to make a source segmentation map to help with scaling the wisp template.'
+    output_dir_help = 'Output folder for wisp-subtracted results. Not used in calculations, just for specifying log location.'
 
     # Add the potential arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--files', dest='files', action='store', nargs='+', type=str, required=False, help=files_help, default='./*_cal.fits')
     parser.add_argument('--nproc', dest='nproc', action='store', type=int, required=False, help=nproc_help, default=6)
+    parser.add_argument('--output_dir', dest='output_dir', action='store', type=str, required=False, help=output_dir_help, default='./')
     parser.add_argument('--wisp_dir', dest='wisp_dir', action='store', type=str, required=False, help=wisp_dir_help, default='./')
     parser.add_argument('--create_segmap', dest='create_segmap', action=argparse.BooleanOptionalAction, required=False, help=create_segmap_help, default=True)
     
@@ -586,7 +607,7 @@ if __name__ == '__main__':
     
     # Get the command line arguments
     args = parse_args()
-
+    log, log_file_path = setup_logger(args.output_dir)
     # Process the input files
-    results = process_files(**vars(args))
+    results = process_files(log, **vars(args))
     log.info('subtract_wisp.py complete.')

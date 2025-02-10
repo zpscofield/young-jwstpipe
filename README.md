@@ -16,6 +16,7 @@ simplify the execution of the various stages of the pipeline.
         - The modified 1/f noise correction algorithm is more significantly modified to handle bright, extended sources and perform better in cluster fields. In general, 
         it does this by using full-row 1/f noise estimates when the amplifier estimate is unreasonably high. Additionally, this algorithm was updated to incorporate multiprocessing.
         - The original 1/f noise correction and background subtraction codes are courtesy of the [*CEERS team*](https://github.com/ceers/ceers-nircam).
+- Speeds up pipeline execution by implementing MPI for stage 1 and 2 processing.
 - Organizes calibrated exposures based on filter and uses the source catalog from the longest wavelength filter as the astrometric calibration catalog for other filters to ensure
 proper alignment.
     - The longest wavelength filter can also be matched to an external catalog provided by the user, and if no external catalog is provided then the initial absolute astrometric
@@ -42,4 +43,4 @@ To use the YOUNG JWST calibration pipeline, simply modify the config.yaml file a
 Finally, to run the pipeline, simply use the following command:
 - $ ./young_pipeline.sh
 
-Once the pipeline execution begins, a new directory will be created (./output) which will contain the output from all stages of the pipeline. Additionally, a log file (pipeline.log) will be created to keep track of the detailed output from the pipeline.
+Once the pipeline execution begins, a new directory will be created (.[target]/output) which will contain the output from all stages of the pipeline. Additionally, a log file (pipeline.log) will be created to keep track of the detailed output from the pipeline.

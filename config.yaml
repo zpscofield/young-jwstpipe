@@ -1,31 +1,52 @@
-## Basic setup ##
+## Basic setup 
 #-----------------------
 # CRDS settings
-crds_path: "/path/to/crds_cache"
+crds_path: "/home/zpscofield/crds_cache"
 crds_server_url: "https://jwst-crds.stsci.edu"
 
-uncal_path: "/path/to/uncal_directory" # Uncalibrated directory path
-target: "TargetName" # Target of observation (for naming purposes)
+dir_prefix: "uncal_test"
+
+combine_observations: false # Whether to combine all uncal files into one mosaic (per filter). Note that these observations should be of the same region,
+                            # of course. If false, the pipeline will run on each independent observation based on their IDs and create output
+                            # directories based on the observation names.
+
+custom_name: "Combined_observation" # Custom association name to use when combining all observations. 
+group_by_directory: true # Set this option to true if you want to run the pipeline for observations per UNCAL directory. It
+                         # will override combine_observations, and create mosaic images for each UNCAL directory. The output directories will be
+                         # labeled according to the initial UNCAL directory names.
 #-----------------------
 
 ## Stage 1 settings
 #-----------------------
+stage1_nproc: 20 # Number of processes to use for stage 1 of the pipeline. Note that this and all other stages and calibration steps, the number of 
+                 # processes will be reduced if the number of files is less than the user-specified nproc value.
 ramp_fit_cores: "1" # Currently (as of 24.11.21) it is necessary to get the development version of the stcal repo (> pip install git+https://github.com/spacetelescope/stcal).
                     # to use more than a single core. However, we strongly advise against this because there is currently a visual artifact associated with using >1 cores 
                     # for the ramp_fitting step.
-jump_cores: "half"
+jump_cores: "1"
 #-----------------------
 
-## Stage 2 settings ##
+## 1/f noise correction settings
 #-----------------------
+fnoise_nproc: 10
+#-----------------------
+
+## Stage 2 settings 
+#-----------------------
+stage2_nproc: 10
 skip_resample: "true"
 #-----------------------
 
-## Wisp subtraction settings
+## Wisp removal settings
 #-----------------------
-wisp_nproc: 32
+wisp_nproc: 10
 plot_sky: false
 #-----------------------
+
+## Background subtraction settings
+#-----------------------
+bkg_nproc: 10
+#----------------------- 
 
 ## Stage 3 settings ##
 #-----------------------
@@ -33,6 +54,7 @@ plot_sky: false
 pixel_scale: 0.02
 pixfrac: 0.75
 rotation: 0.0
+res_kernel: "square"
 
 # Tweakreg settings
 external_reference: false
@@ -42,8 +64,8 @@ tweakreg_snr: 7.0
 #-----------------------
 
 ## Steps to skip ##
-#-----------------------
-skip_steps: [] # Default to an empty list to avoid null error. Uncomment steps below to skip them.
+#----------------------- 
+# Uncomment skip_steps and steps to skip below if necessary.
 skip_steps:
   # - download_uncal_references
   # - stage1

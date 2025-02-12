@@ -164,19 +164,27 @@ def make_segmap(f, log, seg_from_lw=True, sigma=0.8, npixels=10, dilate_segmap=5
         segmap_data[segmap_data!=0] = 1
     
     # Blot LW segmap back onto SW detector space
-    if (seg_from_lw) & ('long' not in detector):
-        segmap_tmp = np.zeros(segmap_data.shape).astype(int)
-        wcs = WCS(fits.getheader(f_lw, 'SCI'))  # lw cal wcs
-        seg_y, seg_x = np.where(segmap_data!=0)
-        sky_coords = wcs.pixel_to_world(seg_x, seg_y)
-        wcs = WCS(fits.getheader(f_sw, 'SCI'))  # sw cal wcs
-        coords = wcs.world_to_pixel(sky_coords)
-        for i in np.arange(len(coords[0])):
-            y,x = int(coords[1][i]), int(coords[0][i])
-            if (y<2048) & (x<2048) & (y>=0) & (x>=0):
-                segmap_tmp[y,x] = 1
-        # Dilate to compensate for y,x rounding due to different lw/sw pixel scales
-        segmap_data = binary_dilation(segmap_tmp, iterations=1, structure=generate_binary_structure(2, 2)).astype(int)
+    if (seg_from_lw) & ('long' not in detector) & ('f_lw' in locals()):
+        try:
+            wcs_lw = WCS(fits.getheader(f_lw, 'SCI'))  
+            wcs_sw = WCS(fits.getheader(f_sw, 'SCI')) 
+        except:
+            log.warning("Long-wavelength WCS could not be retrieved. Using short-wavelength segmentation map as is.")
+            wcs_lw = None
+
+        if wcs_lw:
+            segmap_tmp = np.zeros(segmap_data.shape).astype(int)
+            seg_y, seg_x = np.where(segmap_data != 0)
+            sky_coords = wcs_lw.pixel_to_world(seg_x, seg_y)
+            coords = wcs_sw.world_to_pixel(sky_coords)
+
+            for i in np.arange(len(coords[0])):
+                y, x = int(coords[1][i]), int(coords[0][i])
+                if (y < 2048) & (x < 2048) & (y >= 0) & (x >= 0):
+                    segmap_tmp[y, x] = 1
+
+            # Dilate to compensate for y,x rounding due to different lw/sw pixel scales
+            segmap_data = binary_dilation(segmap_tmp, iterations=1, structure=generate_binary_structure(2, 2)).astype(int)
 
     # Save the segmap
     segmap_data = segmap_data.astype(int)

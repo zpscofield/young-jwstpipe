@@ -67,111 +67,7 @@ def get_observation_info(base_dir, dir_prefix="MAST_", combine=False, group_by_d
                         target_names.add(target_name)
 
                 obs_info.append((name, ",".join(uncal_files)))
-    return obs_info, list(target_names)
-
-
-# def get_observation_info(base_dir, combine=False, group_by_directory=False, use_custom_uncal=False, custom_uncal=None, name="Combined_Mosaic"):
-#     """
-#     Extract observation information from MAST directories or combine all into a single observation.
-
-#     Args:
-#         base_dir (str): Base directory to search for MAST_* folders.
-#         combine (bool): Whether to treat all observations as a single mosaic.
-#         name (str): Custom name for the combined observation.
-
-#     Returns:
-#         tuple: Contains two elements:
-#             - obs_info (list of tuples): Each tuple contains (observation name, directory or list of files).
-#             - target_names (list): A unique list of all target names.
-#     """
-#     obs_info = []
-#     target_names = set()  
-#     all_uncal_files = [] 
-
-#     if use_custom_uncal == False:
-#         # Search for all MAST_*/JWST directories
-#         for mast_dir in glob.glob(os.path.join(base_dir, "MAST_*", "JWST")):
-#             uncal_files = glob.glob(os.path.join(mast_dir, "*_uncal.fits"))
-#             if uncal_files:
-#                 if group_by_directory:
-#                     parent_dir = os.path.basename(os.path.dirname(mast_dir))
-                    
-#                     obs_name = f"Output_{parent_dir}".replace(" ", "_").replace(".", "_")
-#                     obs_info.append((obs_name, ",".join(uncal_files)))
-
-#                     for uncal in uncal_files:
-#                         with fits.open(uncal) as hdul:
-#                             observation_id = os.path.basename(uncal).split('_')[0]
-#                             target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-#                             target_name = target_name.replace(" ", "_")  
-#                             target_name = target_name.replace(".", "_") 
-#                             updated_dir = os.path.join(mast_dir, observation_id + '*')
-
-#                             target_names.add(target_name)  # Add to the set of unique target names
-
-#                 else:
-#                     all_uncal_files.extend(uncal_files)  # Collect files for combined mode
-#                     for uncal in uncal_files:
-#                         with fits.open(uncal) as hdul:
-#                             observation_id = os.path.basename(uncal).split('_')[0]
-#                             target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-#                             target_name = target_name.replace(" ", "_")  
-#                             target_name = target_name.replace(".", "_")
-#                             updated_dir = os.path.join(mast_dir, observation_id + '*')
-
-
-#                         if not combine and target_name not in target_names:
-#                             target_names.add(target_name)  # Add to the set of unique target names
-#                             obs_info.append((target_name, updated_dir)) # For individual mode, append each observation to obs_info
-
-#                     if combine and all_uncal_files:
-#                         # For combined mode, include all files instead of a single directory
-#                         obs_info.append((name, ",".join(all_uncal_files)))
-
-#         return obs_info, list(target_names)  # Convert set to list for consistent output
-    
-#     elif use_custom_uncal == True:
-#         # Search for all MAST_*/JWST directories
-#         for mast_dir in glob.glob(os.path.join(base_dir, f"{custom_uncal}*")):
-#             uncal_files = glob.glob(os.path.join(mast_dir, "*_uncal.fits"))
-#             if uncal_files:
-#                 if group_by_directory:
-#                     parent_dir = os.path.basename(mast_dir)
-
-#                     obs_name = f"Output_{parent_dir}".replace(" ", "_").replace(".", "_")
-#                     obs_info.append((obs_name, ",".join(uncal_files)))
-
-#                     for uncal in uncal_files:
-#                         with fits.open(uncal) as hdul:
-#                             observation_id = os.path.basename(uncal).split('_')[0]
-#                             target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-#                             target_name = target_name.replace(" ", "_")  
-#                             target_name = target_name.replace(".", "_") 
-#                             updated_dir = os.path.join(mast_dir, observation_id + '*')
-
-#                             target_names.add(target_name)  # Add to the set of unique target names
-
-#                 else:
-#                     all_uncal_files.extend(uncal_files)  # Collect files for combined mode
-#                     for uncal in uncal_files:
-#                         with fits.open(uncal) as hdul:
-#                             observation_id = os.path.basename(uncal).split('_')[0]
-#                             target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-#                             target_name = target_name.replace(" ", "_")  
-#                             target_name = target_name.replace(".", "_")
-#                             updated_dir = os.path.join(mast_dir, observation_id + '*')
-
-#                         if not combine and target_name not in target_names:
-#                             target_names.add(target_name)
-#                             obs_info.append((target_name, updated_dir)) # For individual mode, append each observation to obs_info
-
-#                     if combine and all_uncal_files:
-#                         # For combined mode, include all files instead of a single directory
-#                         print("hello5")
-#                         obs_info.append((name, ",".join(all_uncal_files)))
-
-#         return obs_info, list(target_names)  # Convert set to list for consistent output
-        
+    return obs_info, list(target_names)        
 
 if __name__ == "__main__":
     base_dir = sys.argv[1] if len(sys.argv) > 1 else "."
@@ -182,7 +78,7 @@ if __name__ == "__main__":
     combine_observations = config.get("combine_observations", False)
     custom_name = config.get("custom_name", "Combined_Mosaic")
     group_directory = config.get("group_by_directory", False)
-    prefix = config.get("dir_prefix", "MAST_")
+    prefix = config.get("dir_prefix", "MAST_") or "MAST_"
 
     obs_info, target_names = get_observation_info(base_dir, dir_prefix=prefix, combine=combine_observations, group_by_directory=group_directory, name=custom_name)
 

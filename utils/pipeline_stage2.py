@@ -2,98 +2,95 @@ import os
 import yaml
 import numpy as np
 from jwst.pipeline import Image2Pipeline
+from tqdm.auto import tqdm
 import logging
 import sys
-from tqdm.auto import tqdm
-from multiprocessing import current_process
 import argparse
-from mpi4py import MPI
+from multiprocessing import Pool, cpu_count
 
+# Load configuration
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
 os.environ['CRDS_PATH'] = config['crds_path']
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
+def setup_logger(output_dir):
+    """
+    Setup a logger for the pipeline using the provided output directory.
+    """
+    parent_dir = os.path.dirname(output_dir)
+    log_file_path = os.path.join(parent_dir, "logs/pipeline_stage2.log")
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
 
-obs_path = config['target']
-log_file_path = os.path.join(obs_path, "pipeline.log")
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log = logging.getLogger(__name__)
+    log.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter(f'%(asctime)s - Rank {rank} - %(name)s - %(levelname)s - %(message)s')
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+    file_handler = logging.FileHandler(log_file_path, mode='a')
+    file_handler.setFormatter(formatter)
+    log.addHandler(file_handler)
 
-if rank == 0:
     with open(log_file_path, 'a') as log_file:
         log_file.write("\n------------------\n")
         log_file.write("Stage 2 Processing\n")
         log_file.write("------------------\n\n")
 
-file_handler = logging.FileHandler(log_file_path, mode='a')  # Append mode
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
+    return log, log_file_path
 
-crds_log = logging.getLogger("CRDS")
-crds_log.setLevel(logging.INFO)
-crds_handler = logging.FileHandler(log_file_path, mode='a')
-crds_handler.setFormatter(formatter)
-crds_log.addHandler(crds_handler)
+def redirect_output_to_log(log_file):
+    """Redirect stdout and stderr to the specified log file."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    log_fd = open(log_file, 'a')
+    os.dup2(log_fd.fileno(), sys.stdout.fileno())
+    os.dup2(log_fd.fileno(), sys.stderr.fileno())
 
-stpipe_log = logging.getLogger("stpipe")
-stpipe_log.setLevel(logging.INFO)
-stpipe_handler = logging.FileHandler(log_file_path, mode='a')
-stpipe_handler.setFormatter(formatter)
-stpipe_log.addHandler(stpipe_handler)
+def process_file(args):
+    """Process a single file."""
+    img, output_dir, log, log_file = args
+    try:
+        redirect_output_to_log(log_file)
 
-for logger in [log, crds_log, stpipe_log]:
-    for handler in logger.handlers:
-        if isinstance(handler, logging.StreamHandler):
-            logger.removeHandler(handler)
+        # Run Image2Pipeline
+        Image2Pipeline.call(
+            img, 
+            steps={'resample': {'skip': config['skip_resample']}}, 
+            output_dir=output_dir, 
+            save_results=True
+        )
+        print(f"Successfully processed {img}")
+    except Exception as e:
+        log.error(f"Failed to process {img}: {e}")
 
-def split_jobs(img_list):
-    img_count = len(img_list)
-    img_per_process = img_count//size
-    start = rank * img_per_process
-    end = start + img_per_process if rank != size - 1 else img_count
-    img_set = img_list[start:end]
-    return img_set
+def main(input_dir, output_dir, nproc, log, log_file_path):
+    # Get the list of rate.fits files
+    file_list = os.listdir(input_dir)
+    rate_list = [os.path.join(input_dir, file) for file in file_list if file.endswith('rate.fits')]
+    rate_list = np.sort(rate_list)
 
-def stage2(rate, output_dir):
-    if rank == 0:
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    log.info(f"Total files to process: {len(rate_list)}")
 
-    result = Image2Pipeline.call(
-        rate, 
-        steps={'resample': {'skip':config['skip_resample']}}, 
-        output_dir=output_dir, 
-        save_results=True
-    )
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Output directory created: {output_dir}")
 
-if __name__=="__main__":
-    parser = argparse.ArgumentParser(description='Stage 1 of the JWST data reduction pipeline.')
-    parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
-    parser.add_argument('--input_dir', type=str, help='Directory where output will be written')
+    task_args = [(os.path.join(input_dir, img), output_dir, log, log_file_path) for img in rate_list]
+    effective_nproc = min(nproc, len(task_args))
+    with Pool(processes=effective_nproc) as pool:
+        with tqdm(total=len(task_args), file=sys.stdout) as pbar:
+            for _ in pool.imap_unordered(process_file, task_args):
+                pbar.update(1)
+
+    log.info("Pipeline completed successfully.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Stage 2 of the JWST data reduction pipeline.')
+    parser.add_argument('--input_dir', type=str, required=True, help='Directory where input rate.fits files are located')
+    parser.add_argument('--output_dir', type=str, required=True, help='Directory where output will be written')
+    parser.add_argument('--nproc', type=int, default=cpu_count() // 2,
+                        help='Number of parallel processes to use (default: half of available cores)')
     args = parser.parse_args()
 
-    path = args.input_dir
-    file_list = os.listdir(path)
-    rate_list = [file for file in file_list if file.endswith('rate.fits')]
-    rate_list = np.sort(rate_list)
-    total_files = len(rate_list)
-    rate_set = split_jobs(rate_list)
-
-    if rank == 0:
-        set_length = len(rate_set)
-        print(f'Number of processes: {size}')
-        print(f'Files to process for root process: {set_length}')
-
-    for i, rate in enumerate(tqdm(rate_set, file=sys.stderr, disable=(rank != 0))):
-        stage2(os.path.join(path, rate), args.output_dir)
-
-    log.info(f"Rank {rank} has finished processing.")
-    comm.Barrier()
-    MPI.Finalize()
+    log, log_file_path = setup_logger(args.output_dir)
+    main(args.input_dir, args.output_dir, args.nproc, log, log_file_path)

@@ -1,66 +1,80 @@
 ## Basic setup 
 #-----------------------
 # CRDS settings
-crds_path: "/home/zpscofield/crds_cache"
+crds_path: "/path/to/crds_cache" # Path to the CRDS cache directory. This directory should be created by the user before running the pipeline.
 crds_server_url: "https://jwst-crds.stsci.edu"
 
-dir_prefix: "uncal_test"
+dir_prefix: "" # Prefix for all folders containing uncal.fits data. If there are any folders containing uncal.fits data without this prefix,
+                    # they will not be included in the reduction.
 
-combine_observations: false # Whether to combine all uncal files into one mosaic (per filter). Note that these observations should be of the same region,
-                            # of course. If false, the pipeline will run on each independent observation based on their IDs and create output
-                            # directories based on the observation names.
+combine_observations: false # Whether to combine all uncal files into one mosaic (per filter). Note that these observations should be overlapping or,
+                            # adjacent, but do not need to be of the same target. If false, the pipeline will run on each independent observation based 
+                            # on their IDs and create output directories based on the observation names.
 
-custom_name: "Combined_observation" # Custom association name to use when combining all observations. 
-group_by_directory: true # Set this option to true if you want to run the pipeline for observations per UNCAL directory. It
-                         # will override combine_observations, and create mosaic images for each UNCAL directory. The output directories will be
-                         # labeled according to the initial UNCAL directory names.
+custom_name: "Combined_observation" # If combine_observations is set to true, this option defines the resulting combined observation name.
+
+group_by_directory: false # Set this option to true if you want to run the pipeline for observations per UNCAL directory. It
+                         # will override combine_observations, and create mosaic images for each directory containing uncal.fits files. The output 
+                         # directories and files therein will be named according to the original UNCAL directory names (Output_[uncal_directory]).
 #-----------------------
 
 ## Stage 1 settings
 #-----------------------
-stage1_nproc: 20 # Number of processes to use for stage 1 of the pipeline. Note that this and all other stages and calibration steps, the number of 
+stage1_nproc: 45 # Number of processes to use for stage 1 of the pipeline. Note that this and all other stages and calibration steps, the number of 
                  # processes will be reduced if the number of files is less than the user-specified nproc value.
+
 ramp_fit_cores: "1" # Currently (as of 24.11.21) it is necessary to get the development version of the stcal repo (> pip install git+https://github.com/spacetelescope/stcal).
                     # to use more than a single core. However, we strongly advise against this because there is currently a visual artifact associated with using >1 cores 
                     # for the ramp_fitting step.
-jump_cores: "1"
+
+jump_cores: "1" # Should be set to 1 if using multiprocessing for stage 1. In general, using multiprocessing for stages and calibration steps rather than
+                # individual steps within stages is faster. For jump_cores and ramp_fit_cores, the parameter can be set to a string of an integer value ("1", "16", etc.)
+                # or "quarter", "half", or "all".
 #-----------------------
 
 ## 1/f noise correction settings
 #-----------------------
-fnoise_nproc: 10
+fnoise_nproc: 45
 #-----------------------
 
 ## Stage 2 settings 
 #-----------------------
-stage2_nproc: 10
-skip_resample: "true"
+stage2_nproc: 45
+skip_resample: true
 #-----------------------
 
 ## Wisp removal settings
 #-----------------------
-wisp_nproc: 10
+wisp_nproc: 45
 plot_sky: false
 #-----------------------
 
 ## Background subtraction settings
 #-----------------------
-bkg_nproc: 10
+bkg_nproc: 45
 #----------------------- 
 
 ## Stage 3 settings ##
 #-----------------------
+# Outlier detection settings
+outlier_in_memory: true
+
+
 # Resample settings
 pixel_scale: 0.02
 pixfrac: 0.75
 rotation: 0.0
 res_kernel: "square"
+resample_in_memory: true
 
 # Tweakreg settings
-external_reference: false
-reference_path: ""
-starfinder: "dao"
+external_reference: "" # This catalog should be a CSV file with two columns, RA and DEC. If this option is left as an empty string, GAIA DR3 
+                       # will be used for astrometric alignment in place of an external catalog.
+starfinder: "dao" 
 tweakreg_snr: 7.0
+
+# Skymatch settings
+skymethod: "match"
 #-----------------------
 
 ## Steps to skip ##

@@ -202,29 +202,31 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
                 'rotation':config['rotation'],
                 'crpix': [resample_params['crpix1']-1.0, resample_params['crpix2']-1.0],
                 'crval': [resample_params['crval1'], resample_params['crval2']],
-                'output_shape': [resample_params['naxis1'], resample_params['naxis2']]
+                'output_shape': [resample_params['naxis1'], resample_params['naxis2']],
+                'in_memory':config['resample_in_memory']
             }
         }
     if resample_params == None:
         resample_config = {
             'resample': {
                 'kernel':config['res_kernel'],
-                'pixel_scale':0.02,
-                'pixfrac':0.75,
-                'rotation':0.0,
-                'save_results':'true'
+                'pixel_scale':config['pixel_scale'],
+                'pixfrac':config['pixfrac'],
+                'rotation':config['rotation'],
+                'in_memory':config['resample_in_memory']
             }
         }
 
     outlier_config = {
         'outlier_detection': {
                 'pixfrac':config['pixfrac'],
-                'in_memory':'true'
+                'in_memory':config['outlier_in_memory']
             }
         }
     
     skymatch_config = {
         'skymatch': {
+            'skymethod':config['skymethod'],
             'subtract':True
         }
     }
@@ -266,6 +268,7 @@ if __name__ == "__main__":
         'F405N': 4.05, 'F410M': 4.08, 'F430M': 4.28, 'F444W': 4.40, 'F460M': 4.63,
         'F466N': 4.65, 'F470N': 4.71, 'F480M': 4.81,
     }
+
     organize_exposures_by_filter(input_dir, output_base_dir, log)
     filter_dirs = [os.path.join(output_base_dir, d) for d in os.listdir(output_base_dir) if os.path.isdir(os.path.join(output_base_dir, d))]
     filter_names = [os.path.basename(d) for d in filter_dirs]
@@ -274,13 +277,11 @@ if __name__ == "__main__":
 
     for i,dir in enumerate(tqdm(sorted_filter_dirs, file=sys.stderr)):
         if i == 0:
-            if config['external_reference']:
-                ref_cat = config['reference_path']
-                stage3(dir, log, target, reference_catalog=ref_cat)
-            else:
+            ref_cat = config.get("external_reference", None) or None
+            if ref_cat == None:
                 log.info('NO REFERENCE CATALOG PROVIDED, USING GAIADR3')
-                stage3(dir, log, target)
-        
+            stage3(dir, log, target, reference_catalog=ref_cat)
+
             path_longest = dir + '/output_files/'
             convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
             long_cat = os.path.join(path_longest, f'{sorted_filters[0]}.csv')

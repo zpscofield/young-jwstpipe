@@ -43,14 +43,15 @@ restore_stage2_files() {
     find "$stage3_dir" -type f -name '*cal.fits' | while read -r file; do
         # Extract the base filename without the directory
         base_name=$(basename "$file")
-        # Insert "_final" before ".fits"
-        new_name="${base_name/cal/_final}"
+        # Add "_final" before the ".fits" extension
+        new_name="${base_name%.fits}_final.fits"
         # Move and rename the file to stage2_dir
         mv "$file" "$stage2_dir/$new_name"
     done
 
     echo "Files restored and renamed successfully."
 }
+
 
 combine_observations=$(get_yaml_value 'combine_observations' "$CONFIG_FILE")
 group_by_directory=$(get_yaml_value 'group_by_directory' "$CONFIG_FILE")
@@ -125,9 +126,9 @@ run_pipeline() {
             echo "Running pipeline in combined mode."
         fi
         if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            python "$BASE_DIR/utils/pipeline_stage1_new.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+            python "$BASE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
         elif [[ "$combine_observations" == "false" ]]; then
-            python "$BASE_DIR/utils/pipeline_stage1_new.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+            python "$BASE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
         fi
         echo ""
     else
@@ -170,7 +171,7 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 2 "
         echo "===================="
-        python "$BASE_DIR/utils/pipeline_stage2_new.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
+        python "$BASE_DIR/utils/pipeline_stage2.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
         echo ""
     else
         echo "[Pipeline Stage 2 skipped]"

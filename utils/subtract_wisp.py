@@ -250,18 +250,20 @@ def process_files(log, files, nproc, **kwargs):
     non_relevant_files = [f for f in files if f not in relevant_files]
     log.info('Found {} relevant input files.'.format(len(relevant_files)))
     log.info('Found {} non-relevant input files.'.format(len(non_relevant_files)))
-    process_file_partial = partial(process_file, log, **kwargs)
-    effective_nproc = min(nproc, len(relevant_files))
-    with Pool(processes=effective_nproc) as pool:
-        with tqdm(total=len(relevant_files), file=sys.stdout) as pbar:
-            for _ in pool.imap_unordered(process_file_partial, relevant_files):
-                pbar.update(1)
 
     for file in non_relevant_files:
         if file.endswith('_cal.fits'):
             new_filename = file.replace('_cal.fits', '_cal_final.fits')
             os.rename(file, new_filename)
             log.info(f'Renamed {file} to {new_filename}')
+
+    process_file_partial = partial(process_file, log, **kwargs)
+    effective_nproc = min(nproc, len(relevant_files))
+    if effective_nproc != 0:
+        with Pool(processes=effective_nproc) as pool:
+            with tqdm(total=len(relevant_files), file=sys.stdout) as pbar:
+                for _ in pool.imap_unordered(process_file_partial, relevant_files):
+                    pbar.update(1)
 
     for file in files:
         if file.endswith('_cal.fits') and not file.endswith('_cal_final.fits'):

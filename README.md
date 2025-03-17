@@ -5,7 +5,7 @@ simplify the execution of the various stages of the pipeline.
 
 ## Authors & Contributors
 
-**[Zachary P. Scofield](https://github.com/zpscofield)**
+**[Zachary P. Scofield](https://github.com/zpscofield)**, 
 **[Hyungjin Joo](https://github.com/Hyungjin-Joo)**
 
 ## What this JWST calibration pipeline implementation does

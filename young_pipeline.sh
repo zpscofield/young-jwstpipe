@@ -1,10 +1,10 @@
 #!/bin/bash
 START_TIME_TOTAL=$(date +%s)
 
-BASE_DIR_FROM_YAML=$(yq '.base_directory // ""' "$CONFIG_FILE" | tr -d '"')
-BASE_DIR=${BASE_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
+CONFIG_FILE="config.yaml"
 
-CONFIG_FILE="$BASE_DIR/config.yaml"
+DATA_DIR_FROM_YAML=$(yq '.data_directory // ""' "$CONFIG_FILE" | tr -d '"')
+DATA_DIR=${DATA_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
 
 get_yaml_value() {
     local key=$1
@@ -60,8 +60,10 @@ group_by_directory=$(get_yaml_value 'group_by_directory' "$CONFIG_FILE")
 custom_name=$(get_yaml_value 'custom_name' "$CONFIG_FILE")
 full_exposure_striping=$(get_yaml_value 'full_exposure_striping' "$CONFIG_FILE")
 
+PIPELINE_DIR=$(get_yaml_value 'pipeline_directory' "$CONFIG_FILE")
 MY_CRDS_PATH=$(get_yaml_value 'crds_path' "$CONFIG_FILE")
 MY_CRDS_SERVER_URL=$(get_yaml_value 'crds_server_url' "$CONFIG_FILE")
+WISP_DIR=$(get_yaml_value 'wisp_directory' "$CONFIG_FILE")
 STAGE1_NPROC=$(get_yaml_value 'stage1_nproc' "$CONFIG_FILE")
 FNOISE_NPROC=$(get_yaml_value 'fnoise_nproc' "$CONFIG_FILE")
 STAGE2_NPROC=$(get_yaml_value 'stage2_nproc' "$CONFIG_FILE")
@@ -81,7 +83,7 @@ run_pipeline() {
     echo "Processing [$OBS_NAME]"
     echo ""
 
-    OBS_DIR="$BASE_DIR/$OBS_NAME"
+    OBS_DIR="$DATA_DIR/$OBS_NAME"
     mkdir -p "$OBS_DIR/logs"
 
     LOG_FILE1="$OBS_DIR/logs/pipeline_stage1.log"
@@ -132,9 +134,9 @@ run_pipeline() {
             echo "Running pipeline in combined mode."
         fi
         if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            python "$BASE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
         elif [[ "$combine_observations" == "false" ]]; then
-            python "$BASE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
         fi
         echo ""
     else
@@ -152,9 +154,9 @@ run_pipeline() {
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         echo "Accessing flat files before beginning calibration..."
         if [[ "$full_exposure_striping" == "true" ]]; then
-            python "$BASE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output" --measure_full_exp --save_patterns
+            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output" 
         else
-            python "$BASE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output" --save_patterns
+            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output"
         fi
         echo ""
     else
@@ -182,7 +184,7 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 2 "
         echo "===================="
-        python "$BASE_DIR/utils/pipeline_stage2.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
+        python "$PIPELINE_DIR/utils/pipeline_stage2.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
         echo ""
     else
         echo "[Pipeline Stage 2 skipped]"
@@ -197,7 +199,7 @@ run_pipeline() {
         fi
         echo "« Subtracting wisps from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        python "$BASE_DIR/utils/subtract_wisp.py" --files $OBS_DIR/stage2_output/jw*cal.fits --wisp_dir "$BASE_DIR/utils/wisp-templates" --output_dir "$OBS_DIR/stage2_output" --suffix "_wisp" --nproc "$WISP_NPROC"
+        python "$PIPELINE_DIR/utils/subtract_wisp.py" --files $OBS_DIR/stage2_output/jw*cal.fits --wisp_dir "$WISP_DIR" --output_dir "$OBS_DIR/stage2_output" --suffix "_wisp" --nproc "$WISP_NPROC"
         echo ""
     else
         echo "[Wisp subtraction skipped]"
@@ -213,9 +215,9 @@ run_pipeline() {
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         if should_skip_step "wisp_subtraction"; then
-            python "$BASE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
+            python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
         else
-            python "$BASE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
+            python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
         fi
         echo ""
     
@@ -234,14 +236,14 @@ run_pipeline() {
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         if should_skip_step "wisp_subtraction"; then
             if should_skip_step "cal_fnoise_reduction"; then
-                python "$BASE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal.fits --suffix "_cal"
+                python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal.fits --suffix "_cal"
             else
-                python "$BASE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
+                python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
             fi
         elif should_skip_step "cal_fnoise_reduction"; then
-            python "$BASE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --suffix "_wisp"
+            python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --suffix "_wisp"
         else
-            python "$BASE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
+            python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
         echo ""
         fi
     else
@@ -269,7 +271,7 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
-        python "$BASE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output"
+        python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output"
         echo ""
     else
         echo "[Pipeline Stage 3 skipped]"
@@ -295,7 +297,7 @@ echo "# JWST data reduction pipeline #"
 echo "#                              #"
 echo "################################"
 
-OBSERVATIONS=$(python "$BASE_DIR/utils/get_obs_info.py" "$BASE_DIR")
+OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR")
 
 echo ""
 echo "« Observations found »"

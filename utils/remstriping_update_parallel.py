@@ -27,8 +27,6 @@ from stdatamodels import util
 import crds
 from multiprocessing import Pool, cpu_count
 from tqdm.auto import tqdm
-from astropy.stats import mad_std
-from photutils.background import Background2D, MedianBackground
 
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
@@ -129,123 +127,74 @@ def collapse_image(im, mask, dimension='y', sig=2.):
     return res[1]
 
 def masksources(log, image, output_dir):
-    """Mask extended diffuse light using a Source Extractor-like approach."""
-    
+    """Detect sources in an image using a tiered approach for different source sizes."""
     model = ImageModel(image)
     sci = model.data
     err = model.err
+    wht = model.wht
     dq = model.dq
-    
-    log.info('mask_extended_sources: estimating background')
 
-    # Replace NaNs with the median background
-    robust_background = np.nanmedian(sci)
+    bpflag = dqflags.pixel['DO_NOT_USE']
+    bp = np.bitwise_and(dq, bpflag)
+    bpmask = np.logical_not(bp == 0)
+
+    log.info('masking, estimating background')
+    sci_nan = np.choose(np.isnan(err), (sci, err))
+    robust_mean_background = astrostats.biweight_location(sci_nan, c=6., ignore_nan=True)
     sci_filled = np.copy(sci)
-    sci_filled[np.isnan(sci)] = robust_background
-
-    # Estimate large-scale background using a wide mesh
-    log.info('mask_extended_sources: computing large-scale background')
-    bkg = Background2D(sci_filled, box_size=512, filter_size=11, bkg_estimator=MedianBackground())
-    bkg_subtracted = sci_filled - bkg.background
-
-    # Detect sources, including extended diffuse light
-    log.info('mask_extended_sources: detecting extended sources')
-    threshold = 1.0 * mad_std(bkg_subtracted)
-    segm_array = detect_sources(bkg_subtracted, threshold, npixels=5)  # Larger npixels for extended sources
-
-    segm = SegmentationImage(segm_array.data.astype(int))
-    mask = segm.make_source_mask()
-
-    # Save the final mask
-    outputbase = os.path.join(output_dir, os.path.basename(image))
-    maskname = outputbase.replace('.fits', '_iclmask.fits')
-    log.info(f'mask_extended_sources: saving mask to {maskname}')
+    sci_filled[np.isnan(sci)] = robust_mean_background
     
+    log.info('masking, initial source mask')
+    ring = Ring2DKernel(40, 3)
+    filtered = median_filter(sci_filled, footprint=ring.array)
+
+    log.info('masking, mask tier 1')
+    convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(25))
+    threshold = 3 * astrostats.mad_std(convolved_difference)
+    segm_array = detect_sources(convolved_difference, threshold, npixels=15)
+    segm = SegmentationImage(segm_array.data.astype(int))
+    mask1 = segm.make_source_mask()
+
     temp = np.zeros(sci.shape)
-    temp[mask] = 1
+    temp[mask1] = 1
     sources = np.logical_not(temp == 0)
     dilation_sigma = 10
     dilation_window = 11
     dilation_kernel = Gaussian2DKernel(dilation_sigma, x_size=dilation_window, y_size=dilation_window)
     source_wings = binary_dilation(sources, dilation_kernel)
     temp[source_wings] = 1
-    mask = np.logical_not(temp == 0)
+    mask1 = np.logical_not(temp == 0)
 
-    outmask = np.zeros(mask.shape, dtype=int)
-    outmask[mask] = 1
+    log.info('masksources: mask tier 2')
+    convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(15))
+    threshold = 3 * astrostats.mad_std(convolved_difference)
+    segm_array = detect_sources(convolved_difference, threshold, npixels=15)
+    segm = SegmentationImage(segm_array.data.astype(int))
+    mask2 = segm.make_source_mask() | mask1
+
+    log.info('masksources: mask tier 3')
+    convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(5))
+    threshold = 3 * astrostats.mad_std(convolved_difference)
+    segm_array = detect_sources(convolved_difference, threshold, npixels=5)
+    segm = SegmentationImage(segm_array.data.astype(int))
+    mask3 = segm.make_source_mask() | mask2
+
+    log.info('masksources: mask tier 4')
+    convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(2))
+    threshold = 3 * astrostats.mad_std(convolved_difference)
+    segm_array = detect_sources(convolved_difference, threshold, npixels=3)
+    segm = SegmentationImage(segm_array.data.astype(int))
+    mask4 = segm.make_source_mask() | mask3
+
+    finalmask = mask4
+
+    outputbase = os.path.join(output_dir, os.path.basename(image))
+    maskname = outputbase.replace('.fits', '_1fmask_new.fits')
+    log.info('masksources: saving mask to %s' % maskname)
+    outmask = np.zeros(finalmask.shape, dtype=int)
+    outmask[finalmask] = 1
     fits.writeto(maskname, outmask, overwrite=True)
-
     return outmask
-
-# def masksources_old(log, image, output_dir):
-#     """Detect sources in an image using a tiered approach for different source sizes."""
-#     model = ImageModel(image)
-#     sci = model.data
-#     err = model.err
-#     wht = model.wht
-#     dq = model.dq
-
-#     bpflag = dqflags.pixel['DO_NOT_USE']
-#     bp = np.bitwise_and(dq, bpflag)
-#     bpmask = np.logical_not(bp == 0)
-
-#     log.info('masking, estimating background')
-#     sci_nan = np.choose(np.isnan(err), (sci, err))
-#     robust_mean_background = astrostats.biweight_location(sci_nan, c=6., ignore_nan=True)
-#     sci_filled = np.copy(sci)
-#     sci_filled[np.isnan(sci)] = robust_mean_background
-    
-#     log.info('masking, initial source mask')
-#     ring = Ring2DKernel(40, 3)
-#     filtered = median_filter(sci_filled, footprint=ring.array)
-
-#     log.info('masking, mask tier 1')
-#     convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(25))
-#     threshold = 3 * astrostats.mad_std(convolved_difference)
-#     segm_array = detect_sources(convolved_difference, threshold, npixels=15)
-#     segm = SegmentationImage(segm_array.data.astype(int))
-#     mask1 = segm.make_source_mask()
-
-#     temp = np.zeros(sci.shape)
-#     temp[mask1] = 1
-#     sources = np.logical_not(temp == 0)
-#     dilation_sigma = 10
-#     dilation_window = 11
-#     dilation_kernel = Gaussian2DKernel(dilation_sigma, x_size=dilation_window, y_size=dilation_window)
-#     source_wings = binary_dilation(sources, dilation_kernel)
-#     temp[source_wings] = 1
-#     mask1 = np.logical_not(temp == 0)
-
-#     log.info('masksources: mask tier 2')
-#     convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(15))
-#     threshold = 3 * astrostats.mad_std(convolved_difference)
-#     segm_array = detect_sources(convolved_difference, threshold, npixels=15)
-#     segm = SegmentationImage(segm_array.data.astype(int))
-#     mask2 = segm.make_source_mask() | mask1
-
-#     log.info('masksources: mask tier 3')
-#     convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(5))
-#     threshold = 3 * astrostats.mad_std(convolved_difference)
-#     segm_array = detect_sources(convolved_difference, threshold, npixels=5)
-#     segm = SegmentationImage(segm_array.data.astype(int))
-#     mask3 = segm.make_source_mask() | mask2
-
-#     log.info('masksources: mask tier 4')
-#     convolved_difference = convolve_fft(sci-filtered, Gaussian2DKernel(2))
-#     threshold = 3 * astrostats.mad_std(convolved_difference)
-#     segm_array = detect_sources(convolved_difference, threshold, npixels=3)
-#     segm = SegmentationImage(segm_array.data.astype(int))
-#     mask4 = segm.make_source_mask() | mask3
-
-#     finalmask = mask4
-
-#     outputbase = os.path.join(output_dir, os.path.basename(image))
-#     maskname = outputbase.replace('.fits', '_1fmask_new.fits')
-#     log.info('masksources: saving mask to %s' % maskname)
-#     outmask = np.zeros(finalmask.shape, dtype=int)
-#     outmask[finalmask] = 1
-#     fits.writeto(maskname, outmask, overwrite=True)
-#     return outmask
 
 def measure_fullimage_striping(fitdata, mask):
     """Measures striping in countrate images using the full rows."""
@@ -255,7 +204,7 @@ def measure_fullimage_striping(fitdata, mask):
     vertical_striping = collapse_image(temp_image2, mask, dimension='x')
     return horizontal_striping, vertical_striping
 
-def measure_striping(log, image, origfilename, output_dir, measure_full_exp=False, thresh=None, apply_flat=True, mask_sources=True, save_patterns=False, flat_file=None):
+def measure_striping(log, image, origfilename, output_dir, thresh=None, apply_flat=True, mask_sources=True, save_patterns=False, flat_file=None):
     """Removes striping in rate.fits files before flat fielding."""
 
     if thresh is None:
@@ -306,76 +255,59 @@ def measure_striping(log, image, origfilename, output_dir, measure_full_exp=Fals
         log.info('Fit pedestal: %f' % pedestal)
 
     model.data -= pedestal
-    full_horizontal, full_vertical = measure_fullimage_striping(model.data, mask)
+    full_horizontal, vertical_striping = measure_fullimage_striping(model.data, mask)
 
     horizontal_striping = np.zeros(model.data.shape)
     vertical_striping = np.zeros(model.data.shape)
 
-    if measure_full_exp == True:
-        log.info('Full row horizontal 1/f noise being used as set by the user.')
-        column_nmask = np.sum(mask, axis=0)
-        row_nmask = np.sum(mask, axis=1)
-        for i in range(len(full_horizontal)):
-            if row_nmask[i] > (mask.shape[1] * thresh):
-                horizontal_striping[i, :] = 0
+    ampcounts = []
+    for amp in ['A', 'B', 'C', 'D']:
+        ampcount = 0
+        rowstart, rowstop, colstart, colstop = NIR_amps[amp]['data']
+        ampdata = model.data[:, colstart:colstop]
+        ampmask = mask[:, colstart:colstop]
+        hstriping_amp = collapse_image(ampdata, ampmask, dimension='y')
+        nmask = np.sum(ampmask, axis=1)
+        for i, row in enumerate(ampmask):
+            if nmask[i] > (ampmask.shape[1] * thresh):
+                horizontal_striping[i, colstart:colstop] = full_horizontal[i]
+                ampcount += 1
+            elif (hstriping_amp[i] > 2 * (np.nanstd(full_horizontal))):
+                horizontal_striping[i, colstart:colstop] = full_horizontal[i]
             else:
-                horizontal_striping[i, :] = full_horizontal[i]
-        for i in range(len(full_vertical)):
-            if column_nmask[i] > (mask.shape[0] * (thresh-0.3)):
-                vertical_striping[:, i] = vertical_striping[:, i-1]
-            else:
-                vertical_striping[:, i] = full_vertical[i]
-    else:
+                horizontal_striping[i, colstart:colstop] = hstriping_amp[i]
+        ampcounts.append('%s-%i' % (amp, ampcount))
 
-        ampcounts = []
-        for amp in ['A', 'B', 'C', 'D']:
-            ampcount = 0
-            rowstart, rowstop, colstart, colstop = NIR_amps[amp]['data']
-            ampdata = model.data[:, colstart:colstop]
-            ampmask = mask[:, colstart:colstop]
-            hstriping_amp = collapse_image(ampdata, ampmask, dimension='y')
-            nmask = np.sum(ampmask, axis=1)
-            for i, row in enumerate(ampmask):
-                if nmask[i] > (ampmask.shape[1] * thresh):
-                    horizontal_striping[i, colstart:colstop] = full_horizontal[i]
-                    ampcount += 1
-                elif (hstriping_amp[i] > 2 * (np.nanstd(full_horizontal))):
-                    horizontal_striping[i, colstart:colstop] = full_horizontal[i]
-                else:
-                    horizontal_striping[i, colstart:colstop] = hstriping_amp[i]
-            ampcounts.append('%s-%i' % (amp, ampcount))
+    ampinfo = ', '.join(ampcounts)
+    log.info('%s, full row medians used: %s /%i' % (os.path.basename(image), ampinfo, rowstop-rowstart))
 
-        ampinfo = ', '.join(ampcounts)
-        log.info('%s, full row medians used: %s /%i' % (os.path.basename(image), ampinfo, rowstop-rowstart))
+    log.info('%s, checking for any problematic amplifier medians...')
+    # for i in range(horizontal_striping.shape[0]):  # Loop through rows
+    #     amp_values = [] 
+    #     amp_columns = []
 
-        #log.info('%s, checking for any problematic amplifier medians...')
-        # for i in range(horizontal_striping.shape[0]):  # Loop through rows
-        #     amp_values = [] 
-        #     amp_columns = []
+    #     for amp in ['A', 'B', 'C', 'D']:
+    #         _, _, colstart, colstop = NIR_amps[amp]['data']
+    #         amp_median = np.nanmedian(horizontal_striping[i, colstart:colstop])
+    #         amp_values.append(amp_median)
+    #         amp_columns.append((colstart, colstop))
 
-        #     for amp in ['A', 'B', 'C', 'D']:
-        #         _, _, colstart, colstop = NIR_amps[amp]['data']
-        #         amp_median = np.nanmedian(horizontal_striping[i, colstart:colstop])
-        #         amp_values.append(amp_median)
-        #         amp_columns.append((colstart, colstop))
+    #     # Identify overestimated amplifier values
+    #     for j, amp_value in enumerate(amp_values):
+    #         if amp_value > (2 * np.nanstd(full_horizontal)): 
+    #             other_values = np.delete(amp_values, j) 
+    #             replacement_value = np.nanmin(other_values)
+    #             colstart, colstop = amp_columns[j]
+    #             horizontal_striping[i, colstart:colstop] = replacement_value
 
-        #     # Identify overestimated amplifier values
-        #     for j, amp_value in enumerate(amp_values):
-        #         if amp_value > (2 * np.nanstd(full_horizontal)): 
-        #             other_values = np.delete(amp_values, j) 
-        #             replacement_value = np.nanmin(other_values)
-        #             colstart, colstop = amp_columns[j]
-        #             horizontal_striping[i, colstart:colstop] = replacement_value
-
-        temp_sub = model.data - horizontal_striping
-        vstriping = collapse_image(temp_sub, mask, dimension='x')
-        vertical_striping[:, :] = vstriping
+    temp_sub = model.data - horizontal_striping
+    vstriping = collapse_image(temp_sub, mask, dimension='x')
+    vertical_striping[:, :] = vstriping
 
     if save_patterns:
         fits.writeto(outputbase.replace('.fits', '_horiz.fits'), horizontal_striping, overwrite=True)
         fits.writeto(outputbase.replace('.fits', '_vert.fits'), vertical_striping, overwrite=True)
         fits.writeto(outputbase.replace('.fits', '_full_horizontal.fits'), full_horizontal, overwrite=True)
-        fits.writeto(outputbase.replace('.fits', '_mask.fits'), mask.astype(int), overwrite=True)
 
     model.close()
 
@@ -441,8 +373,8 @@ def cleanup_intermediate_files(log, output_dir, image_filename):
                 log.error(f"Error deleting file: {file}, {e}")
 
 def process_file(args):
-    image, pre1f, output_dir, measure_full_exp, thresh, apply_flat, mask_sources, save_patterns, flat_file, log = args
-    measure_striping(log, image, pre1f, output_dir, measure_full_exp=measure_full_exp, thresh=thresh, apply_flat=apply_flat, mask_sources=mask_sources, save_patterns=save_patterns, flat_file=flat_file)
+    image, pre1f, output_dir, thresh, apply_flat, mask_sources, save_patterns, flat_file, log = args
+    measure_striping(log, image, pre1f, output_dir, thresh=thresh, apply_flat=apply_flat, mask_sources=mask_sources, save_patterns=save_patterns, flat_file=flat_file)
     cleanup_intermediate_files(log, output_dir, image)
 
 def main():
@@ -457,11 +389,10 @@ def main():
     group.add_argument('--runone', type=str, help='Filename of single file to clean. Overrides the runall argument')
     group.add_argument('--runall', action='store_true', help='Set to run all *rate.fits images in the output_dir directory.')
     parser.add_argument('image', nargs='?', type=str, help='Filename of rate image for pattern subtraction (required if --runone is not used)')
-    parser.add_argument('--apply_flat', action='store_true', default=True, help='Whether to apply flat-fielding (recommended).')
-    parser.add_argument('--mask_sources', action='store_true', default=True, help='Whether to mask sources (recommended).')
-    parser.add_argument('--measure_full_exp', action='store_true', default=False, help='Whether to perform 1/f noise correction for the entire detector rather than per amplifier.') #, action=argparse.BooleanOptionalAction, required=False, default=True)
+    parser.add_argument('--apply_flat', dest='apply_flat', action=argparse.BooleanOptionalAction, required=False, default=True)
+    parser.add_argument('--mask_sources', dest='mask_sources', action=argparse.BooleanOptionalAction, required=False, default=True)
     args = parser.parse_args()
-    print(args)
+
     log, log_file_path = setup_logger(args.output_dir)
 
     if args.runone:
@@ -492,10 +423,10 @@ def main():
 
     if args.runone:
         pre1f = images[0].replace('rate.fits', 'rate_pre1f.fits')
-        measure_striping(log, images[0], pre1f, args.output_dir, measure_full_exp=args.measure_full_exp, thresh=args.thresh, apply_flat=args.apply_flat, mask_sources=args.mask_sources, save_patterns=args.save_patterns, flat_file=flats_dict[images[0]])
+        measure_striping(log, images[0], pre1f, args.output_dir, thresh=args.thresh, apply_flat=args.apply_flat, mask_sources=args.mask_sources, save_patterns=args.save_patterns, flat_file=flats_dict[images[0]])
         cleanup_intermediate_files(log, args.output_dir, args.runone)
     elif args.runall:
-        pool_args = [(rate, rate.replace('rate.fits', 'rate_pre1f.fits'), args.output_dir, args.measure_full_exp, args.thresh, args.apply_flat, args.mask_sources, args.save_patterns, flats_dict[rate], log) for rate in images]
+        pool_args = [(rate, rate.replace('rate.fits', 'rate_pre1f.fits'), args.output_dir, args.thresh, args.apply_flat, args.mask_sources, args.save_patterns, flats_dict[rate], log) for rate in images]
         effective_nproc = min(args.nproc, len(pool_args))
         with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(pool_args), file=sys.stdout) as pbar:

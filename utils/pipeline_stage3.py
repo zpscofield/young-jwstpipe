@@ -98,21 +98,22 @@ def setup_filter_logger(filter_dir):
                 logger.removeHandler(handler)
     return log_filter
 
-def process_filter(filter_dir, log, target, long_cat, long_params, config):
+def process_filter(filter_dir, log, target, long_cat, long_params, extract_settings, config):
     log_filter = setup_filter_logger(filter_dir)
     try:
         stage3(filter_dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+        extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
 
-def process_filters_parallel(filter_dirs, target, long_cat, long_params, output_base_dir, config):
+def process_filters_parallel(filter_dirs, target, long_cat, long_params, extract_settings, config):
     num_workers = min(8, len(filter_dirs))
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         with tqdm(total=len(filter_dirs), file=sys.stdout, desc="Processing Filters") as pbar:
             futures = {}
             for dir in filter_dirs:
-                future = executor.submit(process_filter, dir, log, target, long_cat, long_params, config)
+                future = executor.submit(process_filter, dir, log, target, long_cat, long_params, extract_settings, config)
                 futures[future] = dir
 
             for future in concurrent.futures.as_completed(futures):
@@ -122,6 +123,20 @@ def process_filters_parallel(filter_dirs, target, long_cat, long_params, output_
                 else:
                     log.info(f"Completed processing for {dir}")
                     pbar.update(1)
+
+def extract_data(filter_dir, target, extract_settings, log):
+    suffixes = ['sci', 'err', 'con', 'wht', 'var_poisson', 'var_rnoise', 'var_flat']
+    output_dir = filter_dir + '/output_files'
+    processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
+    log.info(f"Extracting requested data from {os.path.basename(filter_dir)} i2d file...")
+    for i in range(len(extract_settings)):
+        if extract_settings[i]:
+            data = fits.getdata(processed_file, ext=(i+1))
+            header = fits.getheader(processed_file, ext=(i+1))
+            hdu = fits.PrimaryHDU(data, header=header)
+            hdu.writeto(f'{output_dir}/{target}_{os.path.basename(filter_dir)}_{suffixes[i]}.fits', overwrite=True)
+            log.info(f"Extracted {suffixes[i]} data from {os.path.basename(filter_dir)} i2d file.")
+    log.info(f"Data extraction complete for {os.path.basename(filter_dir)}.")
 
 def get_filter_from_exposure(exp):
     header = fits.getheader(exp, ext=0)
@@ -248,7 +263,7 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
         tweakreg_config = {
             'tweakreg': {
                 'starfinder': config['starfinder'],
-                'snr_threshold': config['tweakreg_snr'],
+                'snr_threshold': config['snr_threshold'],
                 'abs_refcat': 'GAIADR3',
                 'fitgeometry': 'general'
             }
@@ -293,7 +308,13 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
         }
     }
 
-    step_config = {**tweakreg_config, **resample_config, **outlier_config, **skymatch_config}
+    source_cat_config = {
+        'source_catalog': {
+            'snr_threshold':config['snr_threshold']
+        }
+    }
+
+    step_config = {**tweakreg_config, **resample_config, **outlier_config, **skymatch_config, **source_cat_config}
 
     filter = os.path.basename(filter_dir)
     if config.get('combine_observations') == True:
@@ -342,6 +363,16 @@ if __name__ == "__main__":
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)
     sorted_filter_dirs = [os.path.join(output_base_dir, f) for f in sorted_filters]
 
+    extract_settings = [
+        config.get('extract_sci'), 
+        config.get('extract_err'), 
+        config.get('extract_con'), 
+        config.get('extract_wht'), 
+        config.get('extract_var_poisson'), 
+        config.get('extract_var_rnoise'), 
+        config.get('extract_var_flat')
+        ]
+    
     # Process first filter
     ref_cat = config.get("external_reference", None) or None
     if ref_cat is None:
@@ -351,6 +382,7 @@ if __name__ == "__main__":
 
     log_long_filter = setup_filter_logger(sorted_filter_dirs[0])
     stage3(sorted_filter_dirs[0], log_long_filter, target, reference_catalog=ref_cat, resample_params=None, config=config)
+    extract_data(sorted_filter_dirs[0], target, extract_settings, log_long_filter)
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
     if use_multiprocessing == True:
@@ -369,8 +401,10 @@ if __name__ == "__main__":
 
     if use_multiprocessing == True:
         log.info('Multiprocessing is being used. Beginning stage 3 for remaining filters...')
-        process_filters_parallel(sorted_filter_dirs[1:], target, long_cat, long_params, output_base_dir, config=config)
+        process_filters_parallel(sorted_filter_dirs[1:], target, long_cat, long_params, extract_settings, config=config)
 
     else:
         for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stderr)):
-            stage3(dir, log, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+            log_filter = setup_filter_logger(dir)
+            stage3(dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+            extract_data(dir, target, extract_settings, log_filter)

@@ -10,8 +10,13 @@ crds_path: "/home/zpscofield/crds_cache"
 crds_server_url: "https://jwst-crds.stsci.edu"
 # CRDS server URL, should not need to be changed.
 
+pipeline_directory: "."
+# Directory containing:
+# - config.yaml
+# - young_pipeline.sh
+# - utils/
 
-base_directory: "/Volumes/YOUNG6/pipeline_branch_data" 
+data_directory: "/Volumes/YOUNG6/pipeline_branch_data" 
 # The directory containing your folder with uncalibrated data. 
 # The default is the current directory.
 
@@ -129,6 +134,7 @@ outlier_in_memory: true
 
 
 # Resample settings
+# ~~~~~~~~~~~~~~~~~~
 pixel_scale: 0.02
 pixfrac: 0.75
 rotation: 0.0 # 0.0 = North up, East left
@@ -136,36 +142,55 @@ res_kernel: "square"
 resample_in_memory: true
 # Whether to perform resampling in memory. Significantly speeds up resampling if set to true,
 # but requires a large amount of memory.
+# ~~~~~~~~~~~~~~~~~~
 
 # Tweakreg settings
+# ~~~~~~~~~~~~~~~~~~
 external_reference: "" 
 # This catalog should be a CSV file with two columns, RA and DEC. If this option is left as an 
 # empty string, GAIA DR3 will be used for astrometric alignment in place of an external catalog.
+
 starfinder: "segmentation" 
 snr_threshold: 5.0
 abs_fitgeometry: "rshift"
 fitgeometry: "rshift"
-# These tweakreg settings may need to be modified by the user for best results. For cluster fields,
-# these settings seem to work well. For more information on tweakreg settings, refer to the jwst
-# calibration pipeline documentation.
+# These tweakreg settings may need to be modified by the user for best results. For cluster 
+# fields, these settings seem to work well. For more information on tweakreg settings, refer 
+# to the jwst calibration pipeline documentation.
+# ~~~~~~~~~~~~~~~~~~
 
 
 # Skymatch settings
 skymethod: "match"
 #------------------------------------
 
+# Extract images
+#------------------------------------
+# Indicate whether to extract the various extensions from the i2d files. This is helpful if 
+# moving files is necessary, since i2d files have many extensions and can be very large.
+extract_sci: true # image data
+extract_err: true 
+extract_con: false
+extract_wht: true
+extract_var_poisson: false
+extract_var_rnoise: false
+extract_var_flat: false
+#------------------------------------
+
 ## Steps to skip ##
 #------------------------------------
 # Uncomment skip_steps and steps to skip below if necessary.
+# ***IMPORTANT: You should skip one of either fnoise_correction or cal_fnoise_reduction, since they
+# perform 1/f noise mitigation on different files. using both may result in oversubtraction.
 skip_steps:
-  - download_uncal_references
-  - stage1
+  # - download_uncal_references
+  # - stage1
   - fnoise_correction
-  - download_rate_references
+  # - download_rate_references
   # - stage2
   # - wisp_subtraction
   # - cal_fnoise_reduction
   # - background_subtraction
-  - download_cal_references
-  - stage3
+  # - download_cal_references
+  # - stage3
 #------------------------------------

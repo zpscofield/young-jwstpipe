@@ -1,0 +1,171 @@
+## Basic setup 
+#------------------------------------
+
+crds_path: "/home/zpscofield/crds_cache" 
+# Path to the CRDS cache directory. 
+# Setting environment variables for the Calibration References Data System (CRDS) 
+# is outlined in the jwst pipeline documentation, however each script in this custom 
+# pipeline ensures that these necessary CRDS variables are properly assigned.
+
+crds_server_url: "https://jwst-crds.stsci.edu"
+# CRDS server URL, should not need to be changed.
+
+
+base_directory: "/Volumes/YOUNG6/pipeline_branch_data" 
+# The directory containing your folder with uncalibrated data. 
+# The default is the current directory.
+
+dir_prefix: "MAST"
+# Prefix for all folders containing uncal.fits data. If there are any folders 
+# containing uncal.fits data without this prefix, they will be excluded.
+
+combine_observations: false
+# Whether to combine all uncal files into one mosaic (per filter). 
+# Note that these observations should be overlapping or, adjacent, but do not need 
+# to be of the same target. If false, the pipeline will run on each independent 
+# observation based on their IDs and create output directories based on the observation 
+# names.
+
+
+custom_name: "Combined_observation"
+# If combine_observations is set to true, this option defines the resulting combined 
+# observation name.
+
+group_by_directory: false 
+# Set this option to true if you want to run the pipeline for observations per UNCAL 
+# directory. It will override combine_observations, and create mosaic images for each 
+# directory containing uncal.fits files. The output directories and files therein will 
+# be named according to the original UNCAL directory names (Output_[uncal_directory]).
+#------------------------------------
+
+## Stage 1 settings
+#------------------------------------
+stage1_nproc: 64 
+# Number of processes to use for stage 1 of the pipeline. Note that this and all other 
+# stages and calibration steps, the number of processes will be reduced if the number 
+# of files is less than the user-specified nproc value.
+
+ramp_fit_cores: "1" 
+# Currently (as of 24.11.21) it is necessary to get the development version of the 
+# stcal repo (> pip install git+https://github.com/spacetelescope/stcal) to use more 
+# than a single core. However, we strongly advise against this because there is 
+# currently a visual artifact associated with using >1 cores for the ramp_fitting step.
+
+jump_cores: "1" 
+# Should be set to 1 if using multiprocessing for stage 1. In general, using 
+# multiprocessing for stages and calibration steps rather than individual steps within 
+# stages is faster. For jump_cores and ramp_fit_cores, the parameter can be set to a 
+# string of an integer value ("1", "16", etc.) or "quarter", "half", or "all".
+#------------------------------------
+
+## 1/f noise correction (RATE) settings
+#------------------------------------
+fnoise_nproc: 64
+# Number of processes for 1/f noise correction from _rate.fits files.
+
+full_exposure_striping: true 
+# Whether to measure 1/f noise for an entire detector rather than per-amplifier. 
+# Using each amplifier can be problematic for images with extended light such as 
+# clusters with significant ICL or stellar nebulae. If extended light is present,
+# it is better to set this option to true so that the 1/f noise is measured and 
+# removed from the _cal.fits files instead.
+#------------------------------------
+
+## Stage 2 settings 
+#------------------------------------
+stage2_nproc: 64
+# Number of processes to use for stage 2 of the pipeline.
+skip_resample: true
+# Whether to skip the resampling step in stage 2. This is adviseable for saving time.
+#------------------------------------
+
+## Wisp removal settings
+#------------------------------------
+wisp_directory: "/Volumes/YOUNG6/pipeline_branch_data/wisp-templates"
+# Path to the directory containing wisp templates.
+
+wisp_nproc: 64
+# Number of processes to use for the wisp removal step. 
+
+plot_sky: false
+# Whether to plot the sky background for each exposure. By default, wisp template fitting
+# plots will be produced regardless of this setting.
+#------------------------------------
+
+## 1/f noise correction (CAL) settings
+#------------------------------------
+cfnoise_nproc: 64
+# Number of processes for 1/f noise correction from _cal.fits files. This step will only 
+# be performed if the 1/f noise was not already removed from _rate.fits files. See the 
+# description for "1/f noise correction (rate) settings" above for more information.
+#------------------------------------
+
+## Background subtraction settings
+#------------------------------------
+bkg_nproc: 64
+# Number of processes to use for the background subtraction step.
+#------------------------------------
+
+## Stage 3 settings ##
+#------------------------------------
+stage3_use_multiprocessing: true 
+# If true, this will run stage 3 processing with one filter per process AFTER the first 
+# (longest) wavelength filter is complete. The longest filter mosaic is completed first to 
+# provide the necessary WCS information for other filters to be aligned to it. ONLY use 
+# multiprocessing if you are certain your system has enough memory to support it. 
+
+# Running a typical 8-filter observation (320 uncal files, 64 uncal per SW filter and 16 
+# per LW filter, ~34Gb cal files) with 7 filters after the initial filter run:
+
+# - LW filters begin resampling first while short wavelength filters are undergoing outlier 
+# detection -> ~100Gb memory.
+# - Soon after LW filters finish resampling, the resampling for the short wavelength filters 
+# begins. This happens because there are more files for the short wavelength module per 
+# exposure. During this SW filter resampling, ~120Gb of memory was used. 
+
+outlier_in_memory: true
+# Whether to perform outlier detection in memory. Use if you are confident your system has
+# enough available memory. Using memory significantly speeds up the process.
+
+
+# Resample settings
+pixel_scale: 0.02
+pixfrac: 0.75
+rotation: 0.0 # 0.0 = North up, East left
+res_kernel: "square"
+resample_in_memory: true
+# Whether to perform resampling in memory. Significantly speeds up resampling if set to true,
+# but requires a large amount of memory.
+
+# Tweakreg settings
+external_reference: "" 
+# This catalog should be a CSV file with two columns, RA and DEC. If this option is left as an 
+# empty string, GAIA DR3 will be used for astrometric alignment in place of an external catalog.
+starfinder: "segmentation" 
+snr_threshold: 5.0
+abs_fitgeometry: "rshift"
+fitgeometry: "rshift"
+# These tweakreg settings may need to be modified by the user for best results. For cluster fields,
+# these settings seem to work well. For more information on tweakreg settings, refer to the jwst
+# calibration pipeline documentation.
+
+
+# Skymatch settings
+skymethod: "match"
+#------------------------------------
+
+## Steps to skip ##
+#------------------------------------
+# Uncomment skip_steps and steps to skip below if necessary.
+skip_steps:
+  - download_uncal_references
+  - stage1
+  - fnoise_correction
+  - download_rate_references
+  # - stage2
+  # - wisp_subtraction
+  # - cal_fnoise_reduction
+  # - background_subtraction
+  - download_cal_references
+  - stage3
+#------------------------------------

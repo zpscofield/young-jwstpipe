@@ -3,6 +3,11 @@
 A streamlined implementation of the James Webb Space Telescope (JWST) calibration pipeline with additions to improve both the final mosaic image quality and to
 simplify the execution of the various stages of the pipeline.
 
+## Authors & Contributors
+
+**[Zachary P. Scofield](https://github.com/zpscofield)**, 
+**[Hyungjin Joo](https://github.com/Hyungjin-Joo)**
+
 ## What this JWST calibration pipeline implementation does
 
 - Uses a directory containing uncalibrated JWST data files (_uncal.fits) as input

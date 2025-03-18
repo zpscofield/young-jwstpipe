@@ -68,14 +68,6 @@ jump_cores: "1"
 fnoise_nproc: 64
 # Number of processes for 1/f noise correction from _rate.fits files.
 
-full_exposure_striping: true 
-# Whether to measure 1/f noise for an entire detector rather than per-amplifier. 
-# Using each amplifier can be problematic for images with extended light such as 
-# clusters with significant ICL or stellar nebulae. If extended light is present,
-# it is better to set this option to true so that the 1/f noise is measured and 
-# removed from the _cal.fits files instead.
-#------------------------------------
-
 ## Stage 2 settings 
 #------------------------------------
 stage2_nproc: 64
@@ -100,9 +92,14 @@ plot_sky: false
 ## 1/f noise correction (CAL) settings
 #------------------------------------
 cfnoise_nproc: 64
-# Number of processes for 1/f noise correction from _cal.fits files. This step will only 
-# be performed if the 1/f noise was not already removed from _rate.fits files. See the 
-# description for "1/f noise correction (rate) settings" above for more information.
+# Number of processes for 1/f noise correction from _cal.fits files. 
+
+# The "cfnoise" 1/f noise removal method is a gradient based, full exposure 1/f mitigation
+# method. In blank fields, it may not perform as well as the 1/f noise correction algorithm
+# used on _rate.fits files. However, it performs better in the presence of extended light
+# features such as ICL or diffuse gas. The remstriping implementation can lead to
+# oversubtraction in the presence of extended light, so it is recommended to skip the
+# fnoise_correction step and use the cfnoise method instead if extended light is present.
 #------------------------------------
 
 ## Background subtraction settings

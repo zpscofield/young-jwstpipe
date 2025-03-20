@@ -230,7 +230,7 @@ def process_file(log, f, output_dir, wisp_dir='./', create_segmap=True, seg_from
         segmap_data = np.zeros(wisp_data.shape).astype(int)
 
     # Scale and subtract wisp template
-    results = subtract_wisp(f, wisp_data=wisp_data, segmap_data=segmap_data, sub_wisp=sub_wisp, 
+    results = subtract_wisp(log, f, wisp_data=wisp_data, segmap_data=segmap_data, sub_wisp=sub_wisp, 
                             gauss_smooth_wisp=gauss_smooth_wisp, gauss_stddev=gauss_stddev, 
                             scale_wisp=scale_wisp, scale_method=scale_method, poly_degree=poly_degree, 
                             factor_min=factor_min, factor_max=factor_max, factor_step=factor_step, 
@@ -274,7 +274,7 @@ def process_files(log, files, nproc, **kwargs):
 
 # -----------------------------------------------------------------------------
 
-def subtract_wisp(f, wisp_data, segmap_data=None, sub_wisp=True, gauss_smooth_wisp=False, gauss_stddev=3.0, scale_wisp=True,
+def subtract_wisp(log, f, wisp_data, segmap_data=None, sub_wisp=True, gauss_smooth_wisp=False, gauss_stddev=3.0, scale_wisp=True,
                   scale_method='mad', poly_degree=5, factor_min=0.0, factor_max=2.0, factor_step=0.01, min_wisp=None, 
                   flag_wisp_thresh=None, dq_val=1, correct_rows=True, correct_cols=False, save_data=True, save_model=True, plot=True, 
                   show_plot=False, suffix='_wisp'):

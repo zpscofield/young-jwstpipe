@@ -49,3 +49,7 @@ Finally, to run the pipeline, simply use the following command:
 - $ ./young_pipeline.sh
 
 Once the pipeline execution begins, a new directory will be created (.[target]/output) which will contain the output from all stages of the pipeline. Additionally, a log file (pipeline.log) will be created to keep track of the detailed output from the pipeline.
+
+## Acknowledgements
+
+This project includes code or functionality derived from the [jwst project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms developed by the [*CEERS team*](https://github.com/ceers/ceers-nircam).

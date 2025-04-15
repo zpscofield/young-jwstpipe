@@ -14,7 +14,7 @@ simplify the execution of the various stages of the pipeline.
     - These uncalibrated data files can be from the same observation or different overlapping observations. A new association is made in the final processing stage, so it is 
     unnecessary to use the default associations from the pipeline.
 - Executes stages 1, 2, and 3 of the default JWST calibration pipeline, with added calibration steps throughout. These calibration steps include:
-    - 1/f noise correction (Modified version of Micaela Bagley's "remstriping" algorithm)
+    - 1/f noise correction (Modified version of Micaela Bagley's "remstriping" algorithm). An alternative gradient-based method is also available to enable better performance in fields with extended light.
     - Wisp correction (Modified version of Ben Sunnquist's wisp correction algorithm provided in the JWST documentation (version 3))
     - Background subtraction (Modified version of Henry C. Ferguson's background subtraction)
         - The modifications of these calibration steps mostly involve efficiency improvements or changes to help with integration into the YOUNG JWST Pipeline.

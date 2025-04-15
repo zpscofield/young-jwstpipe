@@ -52,4 +52,4 @@ Once the pipeline execution begins, a new directory will be created (.[target]/o
 
 ## Acknowledgements
 
-This project includes code or functionality derived from the [jwst project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms developed by the [*CEERS team*](https://github.com/ceers/ceers-nircam).
+This project includes code or functionality derived from the [jwst project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms from the [*ceers-nircam project*](https://github.com/ceers/ceers-nircam).

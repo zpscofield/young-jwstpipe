@@ -6,6 +6,9 @@ CONFIG_FILE="config.yaml"
 DATA_DIR_FROM_YAML=$(yq '.data_directory // ""' "$CONFIG_FILE" | tr -d '"')
 DATA_DIR=${DATA_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
 
+OUTPUT_DIR_FROM_YAML=$(yq '.output_directory // ""' "$CONFIG_FILE" | tr -d '"')
+OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
+
 get_yaml_value() {
     local key=$1
     local file=$2
@@ -83,7 +86,7 @@ run_pipeline() {
     echo "Processing [$OBS_NAME]"
     echo ""
 
-    OBS_DIR="$DATA_DIR/$OBS_NAME"
+    OBS_DIR="$OUTPUT_DIR/$OBS_NAME"
     mkdir -p "$OBS_DIR/logs"
 
     LOG_FILE1="$OBS_DIR/logs/pipeline_stage1.log"

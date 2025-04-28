@@ -16,11 +16,7 @@ pipeline_directory: "."
 # - young_pipeline.sh
 # - utils/
 
-<<<<<<< HEAD
-data_directory: "/Volumes/YOUNG6/XLSSC112_24.11.21/" 
-=======
 data_directory: "/path/to/pipeline_branch_data" 
->>>>>>> 5c868b2926fcf79b5f4083e6967d59baf79077cb
 # The directory containing your folder with uncalibrated data. 
 # The default is the current directory.
 

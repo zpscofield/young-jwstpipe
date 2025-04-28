@@ -16,7 +16,7 @@ pipeline_directory: "."
 # - young_pipeline.sh
 # - utils/
 
-data_directory: "/path/to/pipeline_branch_data" 
+data_directory: "/path/to/uncal_data" 
 # The directory containing your folder with uncalibrated data. 
 # The default is the current directory.
 

@@ -249,9 +249,6 @@ if __name__ == "__main__":
     files = args.files
     suffix = args.suffix
 
-    print(files)
-    print(output_dir)
-
     pool_args = [(path, output_dir, img, config['plot_sky'], suffix, log, log_file_path) for img in files]
 
     log.info("Starting multiprocessing for background subtraction...")

@@ -186,7 +186,7 @@ def process_file(args):
 
 def process_files(log, files, nproc, output_dir, suffix):
     effective_nproc = nproc #min(nproc, ...)
-    task_args = [(log, img, output_dir, suffix) for img in files] #!!!!
+    task_args = [(log, img, output_dir, suffix) for img in files]
     if effective_nproc != 0:
         with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(files), file=sys.stdout) as pbar:

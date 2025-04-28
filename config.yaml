@@ -24,13 +24,15 @@ dir_prefix: "MAST"
 # Prefix for all folders containing uncal.fits data. If there are any folders 
 # containing uncal.fits data without this prefix, they will be excluded.
 
+output_directory: "."
+# The directory where the final output files will be saved.
+
 combine_observations: false
 # Whether to combine all uncal files into one mosaic (per filter). 
 # Note that these observations should be overlapping or, adjacent, but do not need 
 # to be of the same target. If false, the pipeline will run on each independent 
 # observation based on their IDs and create output directories based on the observation 
 # names.
-
 
 custom_name: "Combined_observation"
 # If combine_observations is set to true, this option defines the resulting combined 

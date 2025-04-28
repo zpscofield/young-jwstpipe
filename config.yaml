@@ -182,13 +182,13 @@ extract_var_flat: false
 # ***IMPORTANT: You should skip one of either fnoise_correction or cal_fnoise_reduction, since they
 # perform 1/f noise mitigation on different files. using both may result in oversubtraction.
 skip_steps:
-  - download_uncal_references
-  - stage1
+  # - download_uncal_references
+  # - stage1
   - fnoise_correction
-  - download_rate_references
-  - stage2
-  - wisp_subtraction
-  - cal_fnoise_reduction
+  # - download_rate_references
+  # - stage2
+  # - wisp_subtraction
+  # - cal_fnoise_reduction
   # - background_subtraction
   # - download_cal_references
   # - stage3

@@ -177,7 +177,6 @@ def process_file(args):
     log, f, output_dir, suffix= args  # Unpack the tuple
     f_name = os.path.basename(f)
     oid, oid2, oid3, chip, exten, old_suffix = f_name.split('_')
-
     imag = fnoise_reduction(f, output_dir)
     data = fits.open(f)
     data[1].data = imag
@@ -187,7 +186,7 @@ def process_file(args):
 
 def process_files(log, files, nproc, output_dir, suffix):
     effective_nproc = nproc #min(nproc, ...)
-    task_args = [(log, os.path.join(output_dir, img), output_dir, suffix) for img in files]
+    task_args = [(log, img, output_dir, suffix) for img in files] #!!!!
     if effective_nproc != 0:
         with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(files), file=sys.stdout) as pbar:

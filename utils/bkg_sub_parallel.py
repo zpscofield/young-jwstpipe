@@ -76,7 +76,7 @@ def fit_sky(data, plot_sky=False, ax=None, color='C1', label=None, **kwargs):
     return popt[1]
 
 def bkgsub(directory, img, log, output_dir, suffix, plot_sky=False):
-    img_path = os.path.join(directory, img)
+    img_path = img#os.path.join(directory, img)
     
     # Check if the file exists
     if not os.path.exists(img_path):
@@ -248,6 +248,9 @@ if __name__ == "__main__":
     output_dir = args.output_dir
     files = args.files
     suffix = args.suffix
+
+    print(files)
+    print(output_dir)
 
     pool_args = [(path, output_dir, img, config['plot_sky'], suffix, log, log_file_path) for img in files]
 

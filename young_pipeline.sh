@@ -6,6 +6,9 @@ CONFIG_FILE="config.yaml"
 DATA_DIR_FROM_YAML=$(yq '.data_directory // ""' "$CONFIG_FILE" | tr -d '"')
 DATA_DIR=${DATA_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
 
+OUTPUT_DIR_FROM_YAML=$(yq '.output_directory // ""' "$CONFIG_FILE" | tr -d '"')
+OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
+
 get_yaml_value() {
     local key=$1
     local file=$2
@@ -83,7 +86,7 @@ run_pipeline() {
     echo "Processing [$OBS_NAME]"
     echo ""
 
-    OBS_DIR="$DATA_DIR/$OBS_NAME"
+    OBS_DIR="$OUTPUT_DIR/$OBS_NAME"
     mkdir -p "$OBS_DIR/logs"
 
     LOG_FILE1="$OBS_DIR/logs/pipeline_stage1.log"
@@ -214,15 +217,20 @@ run_pipeline() {
         fi
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        if should_skip_step "wisp_subtraction"; then
-            python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
+
+        if compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
+            echo "[Detected *_cal_wisp.fits files]"
+            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
         else
-            python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
+            echo "[Detected *_cal.fits files]"
+            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
         fi
+
+        python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $file_pattern --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
         echo ""
-    
+
     else
-        echo "[Cal fnoise reductuction skipped]"
+        echo "[Cal fnoise reduction skipped]"
         echo ""
     fi
 
@@ -234,18 +242,33 @@ run_pipeline() {
         fi
         echo "« Subtracting background from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        if should_skip_step "wisp_subtraction"; then
-            if should_skip_step "cal_fnoise_reduction"; then
-                python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal.fits --suffix "_cal"
-            else
-                python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
-            fi
-        elif should_skip_step "cal_fnoise_reduction"; then
-            python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_wisp.fits --suffix "_wisp"
+
+        if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
+            echo "[Detected *_cal_cfnoise.fits files]"
+            file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
+            suffix="_cfnoise"
+        elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
+            echo "[Detected *_cal_wisp.fits files]"
+            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
+            suffix="_wisp"
+        elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
+            echo "[Detected *_cal.fits files]"
+            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
+            suffix="_cal"
         else
-            python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" --input_dir "$OBS_DIR/stage2_output" --nproc "$BKG_NPROC" --output_dir "$OBS_DIR/stage2_output" --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --suffix "_cfnoise"
-        echo ""
+            echo "[Error: No suitable input files found for background subtraction!]"
+            exit 1
         fi
+
+        python "$PIPELINE_DIR/utils/bkg_sub_parallel.py" \
+            --input_dir "$OBS_DIR/stage2_output" \
+            --nproc "$BKG_NPROC" \
+            --output_dir "$OBS_DIR/stage2_output" \
+            --files $file_pattern \
+            --suffix "$suffix"
+        
+        echo ""
+
     else
         echo "[Background subtraction skipped]"
         echo ""

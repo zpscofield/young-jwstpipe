@@ -107,7 +107,7 @@ def process_filter(filter_dir, log, target, long_cat, long_params, extract_setti
         log.error(f"Error processing filter {filter_dir}: {e}")
 
 def process_filters_parallel(filter_dirs, target, long_cat, long_params, extract_settings, config):
-    num_workers = min(8, len(filter_dirs))
+    num_workers = min(config['min_processes'], len(filter_dirs))
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         with tqdm(total=len(filter_dirs), file=sys.stdout, desc="Processing Filters") as pbar:
@@ -142,10 +142,14 @@ def get_filter_from_exposure(exp):
     header = fits.getheader(exp, ext=0)
     return header['FILTER']
 
-def organize_exposures_by_filter(input_dir, output_base_dir, log):
-    files = [file for file in os.listdir(input_dir) if file.endswith('cal_cfnoise.fits')]
+def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal"):
+    """
+    Organize exposures by filter, given a suffix like '_cfnoise', '_wisp', or '_cal'.
+    """
+    files = [file for file in os.listdir(input_dir) if file.endswith(f'{suffix}.fits')]
+    
     if not files:
-        log.info("No 'cal_cfnoise.fits' files found in the input directory. Exiting function.")
+        log.info(f"No '*{suffix}.fits' files found in the input directory. Exiting function.")
         return
     
     for filename in files:
@@ -153,11 +157,12 @@ def organize_exposures_by_filter(input_dir, output_base_dir, log):
         if os.path.isfile(full_path):
             filter = get_filter_from_exposure(full_path)
             filter_dir = os.path.join(output_base_dir, filter)
+            new_filename = filename.replace(f'{suffix}.fits', '.fits')
             if not os.path.exists(filter_dir):
                 os.makedirs(filter_dir)
-            new_filename = filename.replace('cal_cfnoise.fits', 'cal.fits')
             new_full_path = os.path.join(filter_dir, new_filename)
             shutil.move(full_path, new_full_path)
+
 
 def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, pupil="clear", subarray="full", exp_type="nrc_image"):
     """
@@ -256,7 +261,7 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
                 'snr_threshold': config['snr_threshold'],
                 'abs_refcat': reference_catalog,
                 'abs_fitgeometry': config['abs_fitgeometry'],
-                'fitgeometry': config['fitgeometry']
+                'fitgeometry': config['fitgeometry'],
             }
         }
     if reference_catalog == None:
@@ -264,8 +269,8 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
             'tweakreg': {
                 'starfinder': config['starfinder'],
                 'snr_threshold': config['snr_threshold'],
-                'abs_refcat': 'GAIADR3',
-                'fitgeometry': 'general'
+                'abs_refcat': '',
+                'fitgeometry': config['fitgeometry'],
             }
         }
 
@@ -280,7 +285,7 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
                 'crpix': [resample_params['crpix1']-1.0, resample_params['crpix2']-1.0],
                 'crval': [resample_params['crval1'], resample_params['crval2']],
                 'output_shape': [resample_params['naxis1'], resample_params['naxis2']],
-                'in_memory':config['resample_in_memory']
+                'in_memory': config['resample_in_memory']
             }
         }
     if resample_params == None:
@@ -338,6 +343,8 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--input_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--target', type=str, help='Target name')
+    parser.add_argument('--input_suffix', type=str, default="_cal", help='Suffix of the input cal files')
+
     args = parser.parse_args()
 
     input_dir = args.input_dir
@@ -357,7 +364,7 @@ if __name__ == "__main__":
         'F466N': 4.65, 'F470N': 4.71, 'F480M': 4.81,
     }
 
-    organize_exposures_by_filter(input_dir, output_base_dir, log)
+    organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
     filter_dirs = [os.path.join(output_base_dir, d) for d in os.listdir(output_base_dir) if os.path.isdir(os.path.join(output_base_dir, d))]
     filter_names = [os.path.basename(d) for d in filter_dirs]
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)
@@ -376,7 +383,7 @@ if __name__ == "__main__":
     # Process first filter
     ref_cat = config.get("external_reference", None) or None
     if ref_cat is None:
-        log.info('No reference catalog provided, using GAIADR3')
+        log.info('No reference catalog provided, no absolute astrometric fitting performed.')
     log.info('Running stage 3 for the longest wavelength first...')
     print('Running stage 3 for the longest wavelength first...')
 

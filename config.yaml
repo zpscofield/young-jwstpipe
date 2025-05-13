@@ -1,7 +1,6 @@
 ## Basic setup 
 #------------------------------------
-
-crds_path: "/path/to/crds_cache" 
+crds_path: "/path/to/your/crds_cache" 
 # Path to the CRDS cache directory. 
 # Setting environment variables for the Calibration References Data System (CRDS) 
 # is outlined in the jwst pipeline documentation, however each script in this custom 
@@ -16,11 +15,10 @@ pipeline_directory: "."
 # - young_pipeline.sh
 # - utils/
 
-data_directory: "/path/to/uncal_data" 
-# The parent directory containing your folder with uncalibrated data. 
-# The default is the current directory. The uncalibrated data should be
-# within a subfolder in this directory with a prefix specified by the following
-# option.
+data_directory: "/path/to/data/directory" 
+# The directory containing your folder with uncalibrated data. 
+# The default is the current directory. This should not be the MAST directory
+# containing uncalibrated data. That should be a subfolder within this directory.
 
 dir_prefix: "MAST"
 # Prefix for all subfolders containing uncal.fits data. If there are any folders 
@@ -36,7 +34,7 @@ combine_observations: false
 # observation based on their IDs and create output directories based on the observation 
 # names.
 
-custom_name: "Combined_observation"
+custom_name: "Combined_Observation"
 # If combine_observations is set to true, this option defines the resulting combined 
 # observation name.
 
@@ -76,6 +74,7 @@ fnoise_nproc: 64
 #------------------------------------
 stage2_nproc: 64
 # Number of processes to use for stage 2 of the pipeline.
+
 skip_resample: true
 # Whether to skip the resampling step in stage 2. This is adviseable for saving time.
 #------------------------------------
@@ -83,7 +82,9 @@ skip_resample: true
 ## Wisp removal settings
 #------------------------------------
 wisp_directory: "/path/to/wisp-templates"
-# Path to the directory containing wisp templates.
+# Path to the directory containing wisp templates 
+# (see https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne)
+# *** USE VERSION 3 TEMPLATES ***
 
 wisp_nproc: 64
 # Number of processes to use for the wisp removal step. 
@@ -127,7 +128,13 @@ stage3_use_multiprocessing: true
 # detection -> ~100Gb memory.
 # - Soon after LW filters finish resampling, the resampling for the short wavelength filters 
 # begins. This happens because there are more files for the short wavelength module per 
-# exposure. During this SW filter resampling, ~120Gb of memory was used. 
+# exposure. During this SW filter resampling, ~120Gb of memory was used.
+
+min_processes: 8
+# The minimum number of parallel processes for stage 3 multiprocessing. If the number of 
+# filters is less than this value, the number of processes will default to the number of
+# filters. If you want to use multiprocessing AND resampling in-memory but do not have 
+# sufficient computational resources, you can decrease min_processes to a small value.
 
 outlier_in_memory: true
 # Whether to perform outlier detection in memory. Use if you are confident your system has
@@ -143,26 +150,33 @@ res_kernel: "square"
 resample_in_memory: true
 # Whether to perform resampling in memory. Significantly speeds up resampling if set to true,
 # but requires a large amount of memory.
+
+# For very large observations (e.g., the COSMOS-Web field), using stage3_multiprocessing, 
+# outlier_in_memory, and resample_in_memory becomes heavily dependent on your system. 
 # ~~~~~~~~~~~~~~~~~~
 
 # Tweakreg settings
 # ~~~~~~~~~~~~~~~~~~
 external_reference: "" 
-# This catalog should be a CSV file with two columns, RA and DEC. If this option is left as an 
-# empty string, GAIA DR3 will be used for astrometric alignment in place of an external catalog.
+# This catalog should be a CSV file with two columns, RA and DEC. This option can also be set
+# to values from the jwst pipeline documentation, such as "GAIADR3".
 
 starfinder: "segmentation" 
 snr_threshold: 5.0
 abs_fitgeometry: "rshift"
 fitgeometry: "rshift"
 # These tweakreg settings may need to be modified by the user for best results. For cluster 
-# fields, these settings seem to work well. For more information on tweakreg settings, refer 
+# fields, these settings seem to work well IF the observation was performed on a single day. 
+# For multiple-day visits, the user should try using "general" fit geometry first. If there
+# are issues, then revert to rshift. For more information on tweakreg settings, refer 
 # to the jwst calibration pipeline documentation.
 # ~~~~~~~~~~~~~~~~~~
 
 
 # Skymatch settings
+# ~~~~~~~~~~~~~~~~~~
 skymethod: "match"
+# ~~~~~~~~~~~~~~~~~~
 #------------------------------------
 
 # Extract images
@@ -183,6 +197,13 @@ extract_var_flat: false
 # Uncomment skip_steps and steps to skip below if necessary.
 # ***IMPORTANT: You should skip one of either fnoise_correction or cal_fnoise_reduction, since they
 # perform 1/f noise mitigation on different files. using both may result in oversubtraction.
+# See details above regarding the cal_fnoise_reduction (under cfnoise_nproc option) for information
+# about the two methods. By default, fnoise_correction is skipped since it can oversubtract faint
+# ICL signal in cluster fields. 
+
+# Certain steps cannot be skipped given a specific scenario. For example, if you have run the pipeline
+# and it has completed, you cannot skip the steps up to background subtraction. That is because the
+# original files have been moved and have already been processed.
 skip_steps:
   # - download_uncal_references
   # - stage1

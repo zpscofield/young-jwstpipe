@@ -30,9 +30,11 @@ delete_directory_if_exists() {
 }
 
 delete_stage3_directory_if_exists() {
-    local dir=$1
+    local dir="$1"
+    local suffix="$2"
+
     if [ -d "$dir" ]; then
-        restore_stage2_files "$OBS_DIR/stage3_output" "$OBS_DIR/stage2_output"
+        restore_stage2_files "$OBS_DIR/stage3_output" "$OBS_DIR/stage2_output" "$suffix"
         echo "[Deleting $dir to avoid conflicts.]"
         echo ""
         rm -rf "$dir"
@@ -42,6 +44,7 @@ delete_stage3_directory_if_exists() {
 restore_stage2_files() {
     local stage3_dir="$1"
     local stage2_dir="$2"
+    local suffix="$3"
 
     echo "Restoring and renaming files from $stage3_dir to $stage2_dir..."
     # Find all `cal.fits` files in the filter subdirectories
@@ -49,7 +52,7 @@ restore_stage2_files() {
         # Extract the base filename without the directory
         base_name=$(basename "$file")
         # Add "_final" before the ".fits" extension
-        new_name="${base_name%.fits}_final.fits"
+        new_name="${base_name%.fits}$suffix.fits"
         # Move and rename the file to stage2_dir
         mv "$file" "$stage2_dir/$new_name"
     done
@@ -221,12 +224,14 @@ run_pipeline() {
         if compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
             echo "[Detected *_cal_wisp.fits files]"
             file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
+            suffix="_wisp"
         else
             echo "[Detected *_cal.fits files]"
             file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
+            suffix=""
         fi
 
-        python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $file_pattern --output_dir "$OBS_DIR/stage2_output" --suffix "_cfnoise" --nproc "$CF_NPROC"
+        python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $file_pattern --output_dir "$OBS_DIR/stage2_output" --suffix "$suffix" --nproc "$CF_NPROC"
         echo ""
 
     else
@@ -246,15 +251,15 @@ run_pipeline() {
         if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
             echo "[Detected *_cal_cfnoise.fits files]"
             file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
-            suffix="_cfnoise"
+            suffix2="_cfnoise"
         elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
             echo "[Detected *_cal_wisp.fits files]"
             file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
-            suffix="_wisp"
+            suffix2="_wisp"
         elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
             echo "[Detected *_cal.fits files]"
             file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
-            suffix="_cal"
+            suffix2=""
         else
             echo "[Error: No suitable input files found for background subtraction!]"
             exit 1
@@ -265,7 +270,7 @@ run_pipeline() {
             --nproc "$BKG_NPROC" \
             --output_dir "$OBS_DIR/stage2_output" \
             --files $file_pattern \
-            --suffix "$suffix"
+            --suffix "$suffix2"
         
         echo ""
 
@@ -277,7 +282,8 @@ run_pipeline() {
     if ! should_skip_step "download_cal_references"; then
         echo "« Downloading references for cal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        crds bestrefs --files $OBS_DIR/stage2_output/jw*cal_cfnoise.fits --sync-references=1
+        echo "$suffix2"
+        crds bestrefs --files $OBS_DIR/stage2_output/jw*$suffix2.fits --sync-references=1
         echo ""
     else
         echo "[Download cal references skipped]"
@@ -294,7 +300,8 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
-        python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output"
+        # suffix2="_cfnoise"
+        python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
         echo ""
     else
         echo "[Pipeline Stage 3 skipped]"

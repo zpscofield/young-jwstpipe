@@ -18,10 +18,10 @@ def get_observation_info(data_dir, dir_prefix="MAST_", combine=False, group_by_d
     Returns:
         tuple: Contains two elements:
             - obs_info (list of tuples): Each tuple contains (observation name, directory or list of files).
-            - target_names (list): A unique list of all target names.
+            - program_names (list): A unique list of all target names.
     """
     obs_info = []
-    target_names = set()
+    program_names = set()
 
     # Search for all directories matching the prefix
     search_pattern = os.path.join(data_dir, f"{dir_prefix}*", "**", "*_uncal.fits")
@@ -41,48 +41,29 @@ def get_observation_info(data_dir, dir_prefix="MAST_", combine=False, group_by_d
 
                 for file in files_in_dir:
                     with fits.open(file) as hdul:
-                        target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-                        target_name = target_name.replace(" ", "_").replace(".", "_")
-                        obs_date = hdul[0].header.get('DATE-OBS', '000000').strip()
-                        if obs_date != '000000':
-                            obs_date = obs_date.replace("-", "")[2:]
-
-                        target_name = f"{target_name}_{obs_date}"
-                        target_names.add(target_name)
+                        program_id = hdul[0].header.get('PROGRAM', '00000').strip()
+                        program_names.add(program_id)
         else:
             for uncal in uncal_files:
                 with fits.open(uncal) as hdul:
                     parent_dir = os.path.dirname(uncal)
                     observation_id = os.path.basename(uncal).split('_')[0]
-                    target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-                    target_name = target_name.replace(" ", "_")  
-                    target_name = target_name.replace(".", "_")
-                    obs_date = hdul[0].header.get('DATE-OBS', '000000').strip()
-                    if obs_date != '000000':
-                        obs_date = obs_date.replace("-", "")[2:]
-
-                    target_name = f"{target_name}_{obs_date}"
+                    program_id = hdul[0].header.get('PROGRAM', '00000').strip()
                     updated_dir = os.path.join(parent_dir, observation_id + '*')
 
-                if not combine and target_name not in target_names:
-                    target_names.add(target_name)  # Add to the set of unique target names
-                    obs_info.append((target_name, updated_dir)) # For individual mode, append each observation to obs_info
+                if not combine and program_id not in program_names:
+                    program_names.add(program_id)  # Add to the set of unique target names
+                    obs_info.append((program_id, updated_dir)) # For individual mode, append each observation to obs_info
 
             if combine:
                 # For combined mode, include all files instead of a single directory
                 for uncal in uncal_files:
                     with fits.open(uncal) as hdul:
-                        target_name = hdul[0].header.get('TARGPROP', 'UnknownTarget').strip()
-                        target_name = target_name.replace(" ", "_").replace(".", "_")
-                        obs_date = hdul[0].header.get('DATE-OBS', '000000').strip()
-                        if obs_date != '000000':
-                            obs_date = obs_date.replace("-", "")[2:]
-
-                        target_name = f"{target_name}_{obs_date}"
-                        target_names.add(target_name)
+                        program_id = hdul[0].header.get('PROGRAM', '00000').strip()
+                        program_names.add(program_id)
 
                 obs_info.append((name, ",".join(uncal_files)))
-    return obs_info, list(target_names)        
+    return obs_info, list(program_names)        
 
 if __name__ == "__main__":
     pipeline_dir = sys.argv[1] if len(sys.argv) > 1 else "."
@@ -97,11 +78,11 @@ if __name__ == "__main__":
     group_directory = config.get("group_by_directory", False)
     prefix = config.get("dir_prefix", "MAST_") or "MAST_"
 
-    obs_info, target_names = get_observation_info(data_dir, dir_prefix=prefix, combine=combine_observations, group_by_directory=group_directory, name=custom_name)
+    obs_info, program_names = get_observation_info(data_dir, dir_prefix=prefix, combine=combine_observations, group_by_directory=group_directory, name=custom_name)
 
     # Print observation info for the shell script
     for target, dir_path_or_files in obs_info:
         print(f"OBS:{target}:{dir_path_or_files}")
     
     # Print the list of all unique target names
-    print(f"TARGET_NAMES:{','.join(target_names)}")
+    print(f"TARGET_NAMES:{','.join(program_names)}")

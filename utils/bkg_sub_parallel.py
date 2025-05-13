@@ -204,7 +204,7 @@ def bkgsub(directory, img, log, output_dir, suffix, plot_sky=False):
     os.rename(img_path, renamed_cal)
     # save output
     model.data = processed_data
-    model.save(os.path.join(output_dir, img))
+    model.save(os.path.join(output_dir, os.path.basename(img)))
 
     log.info('finished: %s' % img)
 

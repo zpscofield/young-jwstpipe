@@ -325,8 +325,8 @@ class SubtractBackground:
         # Write out the results
         prefix = fitsfile[:fitsfile.rfind('_')]
         outfile = f"{prefix}_{self.suffix}.fits"
-        outpath = path.join(datadir,outfile)
-        hdu = fits.open(path.join(datadir,fitsfile))
+        # outpath = path.join(datadir,outfile)
+        hdu = fits.open(fitsfile)
         wcs = WCS(hdu['SCI'].header) # Attach WCS to it
         # Replace or append the background-subtracted image
         # Replace
@@ -340,6 +340,6 @@ class SubtractBackground:
         newhdu = fits.ImageHDU(bitmask,header=wcs.to_header(),name='TIERMASK')
         hdu.append(newhdu)
         # Write out the new FITS file
-        hdu.writeto(outpath,overwrite=True)
-        self.log.info(f"Writing out {outpath}")
+        hdu.writeto(outfile,overwrite=True)
+        self.log.info(f"Writing out {outfile}")
         self.log.info("")

@@ -266,11 +266,15 @@ def process_files(log, files, nproc, **kwargs):
 
     for file in files:
         if file.endswith('_cal.fits') and not file.endswith('_cal_wisp.fits'):
-            try:
-                os.remove(file)
-                log.info(f'Deleted {file}')
-            except Exception as e:
-                log.error(f'Error deleting {file}: {e}')
+            if os.path.exists(file):  # ✅ only delete if the file still exists
+                try:
+                    os.remove(file)
+                    log.info(f'Deleted {file}')
+                except Exception as e:
+                    log.error(f'Error deleting {file}: {e}')
+            else:
+                log.info(f'Skipped deletion — {file} was likely renamed earlier.')
+
 
 # -----------------------------------------------------------------------------
 

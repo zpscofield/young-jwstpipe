@@ -39,7 +39,7 @@ def setup_logger(output_dir):
 
     with open(log_file_path, 'a') as log_file:
         log_file.write("\n----------------\n")
-        log_file.write("Wisp subtraction\n")
+        log_file.write("CAL fnoise reduction\n")
         log_file.write("----------------\n\n")
 
     return log, log_file_path
@@ -174,14 +174,20 @@ def fnoise_reduction(image, output_dir, threshold1=70, threshold2=95):
     return y_ref
 
 def process_file(args):
-    log, f, output_dir, suffix= args  # Unpack the tuple
-    f_name = os.path.basename(f)
-    oid, oid2, oid3, chip, exten, old_suffix = f_name.split('_')
+    log, f, output_dir, suffix = args  # Unpack the tuple
+    #f_name = os.path.basename(f)
+    log.info(f'File name: {f}')
     imag = fnoise_reduction(f, output_dir)
     data = fits.open(f)
     data[1].data = imag
-    output_filename = os.path.join(output_dir, f"{oid}_{oid2}_{oid3}_{chip}_{exten}{suffix}.fits")
-    data.writeto(output_filename, overwrite = True)
+    new_suffix = "_cfnoise"
+    try:
+        output_filename = f.replace(f"_cal{suffix}.fits", f"_cal{new_suffix}.fits")
+        data.writeto(output_filename, overwrite = True)
+    except:
+        output_filename = f.replace("_cal.fits", f"_cal{new_suffix}.fits")
+        data.writeto(output_filename, overwrite = True)
+    log.info(f'Result saved: {output_filename}')
     data.close()
 
 def process_files(log, files, nproc, output_dir, suffix):
@@ -210,8 +216,9 @@ if __name__=='__main__':
     log, log_file_path = setup_logger(args.output_dir)
     # Process the input files
     results = process_files(log, **vars(args))
-    files_to_remove = glob(os.path.join(args.output_dir, "**", "*_wisp.fits"), recursive=True)
+    files_to_remove = glob(os.path.join(args.output_dir, "**", f"*_cal{args.suffix}.fits"), recursive=True)
     for file in files_to_remove:
         os.remove(file)
-    log.info('removed _wisp files.')
+        log.info(f'removed {file}')
+    log.info('removed previous files.')
     log.info('fnoise_reduction.py complete.')

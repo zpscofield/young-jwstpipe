@@ -33,7 +33,7 @@ class ScaledVariance:
     def read_file(self,datadir,fitsfile):
         self.fitsfile = fitsfile
         self.datadir = datadir
-        self.hdu = fits.open(path.join(datadir,fitsfile))
+        self.hdu = fits.open(fitsfile)
         self.sci = self.hdu[1].data
         self.var_rdnoise = self.hdu[6].data
         self.mask = self.hdu[self.mask_extension].data

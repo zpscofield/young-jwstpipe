@@ -74,6 +74,17 @@ If you want to preserve the **default JWST stage outputs**, you should:
 - Run only the main stages (`stage1`, `stage2`, `stage3`) **without any additional calibration steps**.
 - Or manually back up your outputs before running additional steps.
 
+> **Notes:**  
+> It is highly recommended **not to skip the `download_uncal_references`, `download_rate_references`, and `download_cal_references` steps during the first pipeline execution**.  
+> These steps ensure that the required CRDS reference files are downloaded and cached locally before the main pipeline stages run.  
+>  
+> Skipping these steps without a fully populated CRDS cache may cause **multiprocessing stages to simultaneously request references from the CRDS server**, potentially overloading the
+> CRDS API and causing the pipeline to crash.
+>
+> **IMPORTANT:**
+> Ensure that your **CRDS cache is located on a local drive** within your system.  
+> Using a network-attached storage (NAS) or remote drive can cause **severe slowdowns during Stage 1, Stage 2, and Stage 3**, due to heavy file I/O demands.
+
 ---
 
 To run the pipeline:

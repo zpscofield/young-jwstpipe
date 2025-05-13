@@ -282,7 +282,6 @@ run_pipeline() {
     if ! should_skip_step "download_cal_references"; then
         echo "« Downloading references for cal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        echo "$suffix2"
         crds bestrefs --files $OBS_DIR/stage2_output/jw*$suffix2.fits --sync-references=1
         echo ""
     else
@@ -300,7 +299,6 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
-        # suffix2="_cfnoise"
         python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
         echo ""
     else

@@ -79,6 +79,7 @@ If you want to preserve the **default JWST stage outputs**, you should:
 To run the pipeline:
 ```bash
 $ ./young_pipeline.sh
+```
 
 Once the pipeline execution begins, a new directory will be created (output_directory/program) which will contain the output from all stages of the pipeline. Additionally, log files (.log) will be created to keep track of the detailed output from the pipeline. For stage 3 processing, log files will be located in the final filter directories.
 

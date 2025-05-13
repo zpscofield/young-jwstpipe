@@ -97,3 +97,5 @@ Once the pipeline execution begins, a new directory will be created (`output_dir
 ## Acknowledgements
 
 This project includes code or functionality derived from the [*jwst* project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms from the [*ceers-nircam* project](https://github.com/ceers/ceers-nircam).
+
+This repository was created using version 1.16.1 of the JWST calibration pipeline. 

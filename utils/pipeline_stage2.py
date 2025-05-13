@@ -66,7 +66,7 @@ def process_file(args):
 def main(input_dir, output_dir, nproc, log, log_file_path):
     # Get the list of rate.fits files
     file_list = os.listdir(input_dir)
-    rate_list = [os.path.join(input_dir, file) for file in file_list if file.endswith('rate.fits')]
+    rate_list = [file for file in file_list if file.endswith('rate.fits')]
     rate_list = np.sort(rate_list)
 
     log.info(f"Total files to process: {len(rate_list)}")

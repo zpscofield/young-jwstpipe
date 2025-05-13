@@ -76,7 +76,7 @@ def fit_sky(data, plot_sky=False, ax=None, color='C1', label=None, **kwargs):
     return popt[1]
 
 def bkgsub(directory, img, log, output_dir, suffix, plot_sky=False):
-    img_path = os.path.join(directory, img)
+    img_path = img#os.path.join(directory, img)
     
     # Check if the file exists
     if not os.path.exists(img_path):

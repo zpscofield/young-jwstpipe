@@ -14,7 +14,7 @@ simplify the execution of the various stages of the pipeline.
     - These uncalibrated data files can be from the same observation or different overlapping observations. A new association is made in the final processing stage, so it is 
     unnecessary to use the default associations from the pipeline.
 - Executes stages 1, 2, and 3 of the default JWST calibration pipeline, with added calibration steps throughout. These calibration steps include:
-    - 1/f noise correction (Modified version of Micaela Bagley's "remstriping" algorithm)
+    - 1/f noise correction (Modified version of Micaela Bagley's "remstriping" algorithm). An alternative gradient-based method is also available to enable better performance in fields with extended light.
     - Wisp correction (Modified version of Ben Sunnquist's wisp correction algorithm provided in the JWST documentation (version 3))
     - Background subtraction (Modified version of Henry C. Ferguson's background subtraction)
         - The modifications of these calibration steps mostly involve efficiency improvements or changes to help with integration into the YOUNG JWST Pipeline.
@@ -35,7 +35,7 @@ proper alignment.
 Installation instructions can be found on the [*JWST calibration pipeline*](https://jwst-pipeline.readthedocs.io/en/latest/) site, along with other information regarding the default 
 pipeline. It is also necessary to have the command-line YAML processor [*yq*](https://pypi.org/project/yq/) installed, and the packages [*psutil*](https://anaconda.org/conda-forge/psutil/) and [*tqdm*](https://anaconda.org/conda-forge/tqdm).
 
-The wisp templates necessary for the wisp correction step can be found [*here*](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne/folder/275049066832?page=2), and are the version 3 templates provided in the [*JWST documentation*](https://jwst-docs.stsci.edu/known-issues-with-jwst-data/nircam-known-issues/nircam-scattered-light-artifacts#gsc.tab=0). These templates (FITS files) should be placed in the provided wisp-template folder within the ./utils directory.
+The wisp templates necessary for the wisp correction step can be found [*here*](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne/folder/275049066832?page=2), and are the version 3 templates provided in the [*JWST documentation*](https://jwst-docs.stsci.edu/known-issues-with-jwst-data/nircam-known-issues/nircam-scattered-light-artifacts#gsc.tab=0). These templates (FITS files) should be placed in a location specified by the user in the configuration file.
 
 It is strongly encouraged to have a large directory available when running this JWST pipeline implementation, given that the intermediate files are saved.
 
@@ -49,3 +49,7 @@ Finally, to run the pipeline, simply use the following command:
 - $ ./young_pipeline.sh
 
 Once the pipeline execution begins, a new directory will be created (.[target]/output) which will contain the output from all stages of the pipeline. Additionally, a log file (pipeline.log) will be created to keep track of the detailed output from the pipeline.
+
+## Acknowledgements
+
+This project includes code or functionality derived from the [*jwst* project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms from the [*ceers-nircam* project](https://github.com/ceers/ceers-nircam).

@@ -98,8 +98,8 @@ class SubtractBackground:
     replace_sci: bool = False
     dq_flags_to_mask: list = ('SATURATED',)
 
-    def open_file(self,directory,fitsfile):
-        with fits.open(path.join(directory,fitsfile)) as hdu:
+    def open_file(self,directory,fitsfile): #directory
+        with fits.open(fitsfile) as hdu: #with fits.open(path.join(directory,fitsfile)) as hdu:
             sci = hdu['SCI'].data
             try:
                 err = hdu['ERR'].data

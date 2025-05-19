@@ -47,13 +47,9 @@ restore_stage2_files() {
     local suffix="$3"
 
     echo "Restoring and renaming files from $stage3_dir to $stage2_dir..."
-    # Find all `cal.fits` files in the filter subdirectories
     find "$stage3_dir" -type f -name '*cal.fits' | while read -r file; do
-        # Extract the base filename without the directory
         base_name=$(basename "$file")
-        # Add "_final" before the ".fits" extension
         new_name="${base_name%.fits}$suffix.fits"
-        # Move and rename the file to stage2_dir
         mv "$file" "$stage2_dir/$new_name"
     done
 
@@ -107,13 +103,12 @@ run_pipeline() {
         echo "« Downloading references for uncal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            IFS=',' read -r -a uncal_files <<< "$UNCAL_PATH" # Comma-separated string to array of file paths
-            declare -A unique_dirs  # Associative array for uniqueness
+            IFS=',' read -r -a uncal_files <<< "$UNCAL_PATH" 
+            declare -A unique_dirs  
             for file in "${uncal_files[@]}"; do
                 dir=$(dirname "$file")
                 unique_dirs["$dir"]=1
             done
-            # Process each unique directory
             for dir in "${!unique_dirs[@]}"; do
                 crds bestrefs --files ${dir}/jw*uncal.fits --sync-references=1
             done
@@ -282,7 +277,6 @@ run_pipeline() {
     if ! should_skip_step "download_cal_references"; then
         echo "« Downloading references for cal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        echo "$suffix2"
         crds bestrefs --files $OBS_DIR/stage2_output/jw*$suffix2.fits --sync-references=1
         echo ""
     else
@@ -300,7 +294,6 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
-        # suffix2="_cfnoise"
         python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
         echo ""
     else
@@ -344,7 +337,6 @@ for line in $OBSERVATIONS; do
     fi
 done
 
-# Print all target names
 echo "All target names:"
 IFS=',' read -r -a targets <<< "$target_names"
 for target in "${targets[@]}"; do

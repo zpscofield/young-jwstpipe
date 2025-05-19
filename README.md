@@ -14,7 +14,7 @@ simplify the execution of the various stages of the pipeline.
 - Uses a directory containing uncalibrated JWST data files (`_uncal.fits`) as input.
     - These files can be from the same observation or overlapping observations.  
       A new association is created during the final processing stage, so it is unnecessary to use the default associations from the JWST pipeline.
-- Executes stages 1, 2, and 3 of the default JWST calibration pipeline, with added calibration steps:
+- Executes Stages 1, 2, and 3 of the default JWST calibration pipeline, with added calibration steps:
     - **1/f noise correction** (Modified version of Micaela Bagley's *remstriping* algorithm).  
       An alternative gradient-based method is also available for improved performance in fields with extended light.
     - **Wisp correction** (Modified version of Ben Sunnquist's wisp correction algorithm, JWST documentation version 3).
@@ -74,6 +74,17 @@ If you want to preserve the **default JWST stage outputs**, you should:
 - Run only the main stages (`stage1`, `stage2`, `stage3`) **without any additional calibration steps**.
 - Or manually back up your outputs before running additional steps.
 
+> **Notes:**  
+> It is highly recommended **not to skip the `download_uncal_references`, `download_rate_references`, and `download_cal_references` steps during the first pipeline execution**.  
+> These steps ensure that the required CRDS reference files are downloaded and cached locally before the main pipeline stages run.  
+>  
+> Skipping these steps without a fully populated CRDS cache may cause **multiprocessing stages to simultaneously request references from the CRDS server**, potentially overloading the
+> CRDS API and causing the pipeline to crash.
+>
+> **IMPORTANT:**
+> Ensure that your **CRDS cache is located on a local drive** within your system.  
+> Using a network-attached storage (NAS) or remote drive can cause **severe slowdowns during Stage 1, Stage 2, and Stage 3**, due to heavy file I/O demands.
+
 ---
 
 To run the pipeline:
@@ -81,8 +92,10 @@ To run the pipeline:
 $ ./young_pipeline.sh
 ```
 
-Once the pipeline execution begins, a new directory will be created (output_directory/program) which will contain the output from all stages of the pipeline. Additionally, log files (.log) will be created to keep track of the detailed output from the pipeline. For stage 3 processing, log files will be located in the final filter directories.
+Once the pipeline execution begins, a new directory will be created (`output_directory/program`) which will contain the output from all stages of the pipeline. Additionally, log files (.log) will be created to keep track of the detailed output from the pipeline. For Stage 3 processing, log files will be located in the final filter directories.
 
 ## Acknowledgements
 
 This project includes code or functionality derived from the [*jwst* project](https://github.com/spacetelescope/jwst), developed by the Space Telescope Science Institute (STScI) and the Association of Universities for Research in Astronomy (AURA). This project also incorporates algorithms from the [*ceers-nircam* project](https://github.com/ceers/ceers-nircam).
+
+This repository was created using version 1.16.1 of the JWST calibration pipeline. 

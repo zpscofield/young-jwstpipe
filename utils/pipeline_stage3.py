@@ -133,8 +133,12 @@ def extract_data(filter_dir, target, extract_settings, log):
         if extract_settings[i]:
             data = fits.getdata(processed_file, ext=(i+1))
             header = fits.getheader(processed_file, ext=(i+1))
-            hdu = fits.PrimaryHDU(data, header=header)
-            hdu.writeto(f'{output_dir}/{target}_{os.path.basename(filter_dir)}_{suffixes[i]}.fits', overwrite=True)
+            pri_header = fits.getheader(processed_file, ext=0)
+
+            primary_hdu = fits.PrimaryHDU(data=None, header=pri_header)
+            image_hdu = fits.ImageHDU(data=data, header=header)
+            hdulist = fits.HDUList([primary_hdu, image_hdu])
+            hdulist.writeto(f'{output_dir}/{target}_{os.path.basename(filter_dir)}_{suffixes[i]}.fits', overwrite=True)
             log.info(f"Extracted {suffixes[i]} data from {os.path.basename(filter_dir)} i2d file.")
     log.info(f"Data extraction complete for {os.path.basename(filter_dir)}.")
 

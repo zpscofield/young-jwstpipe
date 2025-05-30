@@ -47,7 +47,8 @@ def get_observation_info(data_dir, dir_prefix="MAST_", combine=False, group_by_d
             for uncal in uncal_files:
                 with fits.open(uncal) as hdul:
                     parent_dir = os.path.dirname(uncal)
-                    observation_id = os.path.basename(uncal).split('_')[0]
+                    full_id = os.path.basename(uncal).split('_')[0]
+                    observation_id = full_id[:11]
                     program_id = hdul[0].header.get('PROGRAM', '00000').strip()
                     updated_dir = os.path.join(parent_dir, observation_id + '*')
 

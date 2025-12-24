@@ -1,6 +1,6 @@
 ## Basic setup 
 #------------------------------------
-crds_path: "/path/to/your/crds_cache" 
+crds_path: "/home/zpscofield/crds_cache" 
 # Path to the CRDS cache directory. 
 # Setting environment variables for the Calibration References Data System (CRDS) 
 # is outlined in the jwst pipeline documentation, however each script in this custom 
@@ -15,7 +15,7 @@ pipeline_directory: "."
 # - young_pipeline.sh
 # - utils/
 
-data_directory: "/path/to/data/directory" 
+data_directory: "/Volumes/YOUNG6/XLSSC112_24.11.21" 
 # The directory containing your folder with uncalibrated data. 
 # The default is the current directory. This should not be the MAST directory
 # containing uncalibrated data. That should be a subfolder within this directory.
@@ -81,7 +81,7 @@ skip_resample: true
 
 ## Wisp removal settings
 #------------------------------------
-wisp_directory: "/path/to/wisp-templates"
+wisp_directory: "/Volumes/YOUNG6/pipeline_branch_data/wisp-templates"
 # Path to the directory containing wisp templates 
 # (see https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne)
 # *** USE VERSION 3 TEMPLATES ***
@@ -207,11 +207,11 @@ extract_var_flat: false
 skip_steps:
   # - download_uncal_references
   # - stage1
-  - fnoise_correction
+  # - fnoise_correction
   # - download_rate_references
   # - stage2
   # - wisp_subtraction
-  # - cal_fnoise_reduction
+  - cal_fnoise_reduction
   # - background_subtraction
   # - download_cal_references
   # - stage3

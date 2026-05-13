@@ -23,6 +23,7 @@ commits.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,7 +40,10 @@ from mast_lookup import (
 from mast_download import download_uncal
 
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+REPO_ROOT = Path(__file__).resolve().parent
+CONFIG_PATH = REPO_ROOT / "config.yaml"
+PIPELINE_SCRIPT = REPO_ROOT / "young_pipeline.sh"
+MAX_LOG_LINES = 500
 
 PIPELINE_STEPS = [
     "download_uncal_references",
@@ -65,6 +69,41 @@ def load_config() -> dict:
 def save_config(config: dict) -> None:
     with open(CONFIG_PATH, "w") as f:
         yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+
+
+def run_pipeline_streaming() -> int:
+    """Run young_pipeline.sh and stream its output into the UI. Returns exit code."""
+    with st.status("Running pipeline…", expanded=True, state="running") as status:
+        log_placeholder = st.empty()
+        lines: list[str] = []
+
+        process = subprocess.Popen(
+            ["bash", str(PIPELINE_SCRIPT)],
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        assert process.stdout is not None
+        for line in process.stdout:
+            lines.append(line.rstrip("\n"))
+            log_placeholder.code(
+                "\n".join(lines[-MAX_LOG_LINES:]),
+                language=None,
+            )
+
+        return_code = process.wait()
+
+        if return_code == 0:
+            status.update(label="Pipeline finished successfully.", state="complete")
+        else:
+            status.update(
+                label=f"Pipeline exited with code {return_code}. See log above.",
+                state="error",
+            )
+        return return_code
 
 
 def _get(config: dict, key: str, default):
@@ -472,10 +511,18 @@ for key, value in current.items():
 
 
 st.divider()
-left, right = st.columns([1, 3])
+left, middle, right = st.columns([1, 1, 3])
 with left:
-    if st.button("Save config.yaml", type="primary"):
+    if st.button("Save config.yaml"):
         save_config(new_config)
         st.success(f"Saved {CONFIG_PATH}")
+with middle:
+    if st.button("Save & Run pipeline ▶", type="primary"):
+        save_config(new_config)
+        st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
+        run_pipeline_streaming()
 with right:
-    st.caption("Save & Run will appear once the data-source and run-trigger code lands.")
+    st.caption(
+        "Save & Run writes config.yaml, then runs young_pipeline.sh and streams "
+        "its output above. Per-stage detail still lands in <output>/<obs>/logs/."
+    )

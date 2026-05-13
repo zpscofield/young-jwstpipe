@@ -69,29 +69,12 @@ crds_bestrefs_for_uncal_input() {
 
 delete_stage3_directory_if_exists() {
     local dir="$1"
-    local suffix="$2"
 
     if [ -d "$dir" ]; then
-        restore_stage2_files "$OBS_DIR/stage3_output" "$OBS_DIR/stage2_output" "$suffix"
         echo "[Deleting $dir to avoid conflicts.]"
         echo ""
         rm -rf "$dir"
     fi
-}
-
-restore_stage2_files() {
-    local stage3_dir="$1"
-    local stage2_dir="$2"
-    local suffix="$3"
-
-    echo "Restoring and renaming files from $stage3_dir to $stage2_dir..."
-    find "$stage3_dir" -type f -name '*cal.fits' | while read -r file; do
-        base_name=$(basename "$file")
-        new_name="${base_name%.fits}$suffix.fits"
-        mv "$file" "$stage2_dir/$new_name"
-    done
-
-    echo "Files restored and renamed successfully."
 }
 
 

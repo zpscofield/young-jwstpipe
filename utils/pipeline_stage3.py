@@ -3,7 +3,6 @@ import subprocess
 from multiprocessing import current_process
 import json
 import yaml
-import shutil
 import numpy as np
 from jwst.pipeline import Image3Pipeline
 from astropy.io import fits
@@ -98,22 +97,23 @@ def setup_filter_logger(filter_dir):
                 logger.removeHandler(handler)
     return log_filter
 
-def process_filter(filter_dir, log, target, long_cat, long_params, extract_settings, config):
+def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, extract_settings, config):
     log_filter = setup_filter_logger(filter_dir)
     try:
-        stage3(filter_dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config)
         extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
 
-def process_filters_parallel(filter_dirs, target, long_cat, long_params, extract_settings, config):
+def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config):
     num_workers = min(config['min_processes'], len(filter_dirs))
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         with tqdm(total=len(filter_dirs), file=sys.stdout, desc="Processing Filters") as pbar:
             futures = {}
             for dir in filter_dirs:
-                future = executor.submit(process_filter, dir, log, target, long_cat, long_params, extract_settings, config)
+                filter_name = os.path.basename(dir)
+                future = executor.submit(process_filter, dir, filter_to_paths[filter_name], log, target, long_cat, long_params, extract_settings, config)
                 futures[future] = dir
 
             for future in concurrent.futures.as_completed(futures):
@@ -148,51 +148,51 @@ def get_filter_from_exposure(exp):
 
 def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal"):
     """
-    Organize exposures by filter, given a suffix like '_cfnoise', '_wisp', or '_cal'.
+    Group exposures by filter (read from the FILTER header). Returns a
+    dict {filter_name: [absolute_path, ...]} and creates an empty
+    per-filter directory under output_base_dir for each filter found.
+
+    Files are NOT moved or copied; the ASN file generated later will
+    reference them by absolute path so stage 3 can read them in place.
     """
     files = [file for file in os.listdir(input_dir) if file.endswith(f'{suffix}.fits')]
-    
+
     if not files:
         log.info(f"No '*{suffix}.fits' files found in the input directory. Exiting function.")
-        return
-    
+        return {}
+
+    filter_to_paths = {}
     for filename in files:
-        full_path = os.path.join(input_dir, filename)
-        if os.path.isfile(full_path):
-            filter = get_filter_from_exposure(full_path)
-            filter_dir = os.path.join(output_base_dir, filter)
-            new_filename = filename.replace(f'{suffix}.fits', '.fits')
-            if not os.path.exists(filter_dir):
-                os.makedirs(filter_dir)
-            new_full_path = os.path.join(filter_dir, new_filename)
-            shutil.move(full_path, new_full_path)
+        full_path = os.path.abspath(os.path.join(input_dir, filename))
+        if not os.path.isfile(full_path):
+            continue
+        filter_name = get_filter_from_exposure(full_path)
+        filter_to_paths.setdefault(filter_name, []).append(full_path)
+
+    for filter_name in filter_to_paths:
+        filter_dir = os.path.join(output_base_dir, filter_name)
+        os.makedirs(filter_dir, exist_ok=True)
+
+    return filter_to_paths
 
 
-def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, pupil="clear", subarray="full", exp_type="nrc_image"):
+def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, input_paths, pupil="clear", subarray="full", exp_type="nrc_image"):
     """
-    Creates a single custom association file with specified metadata, including all exposures in the directory.
+    Creates a single custom association file with specified metadata.
 
-    :param directory: The directory containing the FITS files.
-    :param output_filename: The path to save the association JSON file.
-    :param program: The program ID.
-    :param target: The target ID.
-    :param instrument: The instrument used.
-    :param filter: The filter used.
-    :param pupil: The pupil setting (default "clear").
-    :param subarray: The subarray setting (default "full").
-    :param exp_type: The exposure type (default "nrc_image").
+    input_paths is the list of exposure paths (absolute, in stage2_output)
+    that will be referenced by the ASN. Files are not copied; the JWST
+    Image3Pipeline reads them from their original location.
     """
-    members = []
-
-    for file in os.listdir(filter_dir):
-        if file.endswith('.fits'):
-            # Assuming all files should be included as science exposures
-            members.append({
-                "expname": file,
-                "exptype": "science",
-                "exposerr": None,
-                "asn_candidate": "(custom, observation)"
-            })
+    members = [
+        {
+            "expname": path,
+            "exptype": "science",
+            "exposerr": None,
+            "asn_candidate": "(custom, observation)",
+        }
+        for path in input_paths
+    ]
 
     association = {
         "asn_type": "image3",
@@ -245,7 +245,7 @@ def extract_resample_info(mosaic_img_path):
         }
     return resample_info
 
-def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None, config=None):
+def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None):
 
     output_dir = filter_dir + '/output_files'
 
@@ -329,13 +329,12 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
     if config.get('combine_observations') == True:
         program = "00000"
     else:
-        fits_files = [f for f in os.listdir(filter_dir) if f.endswith('.fits')]
-        header = fits.getheader(os.path.join(filter_dir, fits_files[0]), ext=0)
+        header = fits.getheader(input_paths[0], ext=0)
         program = header['PROGRAM']
     instrument = "nircam"
     output_filename = filter_dir + '/' + filter + '_asn.json'
 
-    create_custom_association(filter_dir, output_filename, program, target, instrument, filter)
+    create_custom_association(filter_dir, output_filename, program, target, instrument, filter, input_paths)
 
     asn_list = [os.path.join(filter_dir, file) for file in os.listdir(filter_dir) if file.endswith('asn.json')]
     asn = asn_list[0]
@@ -368,9 +367,9 @@ if __name__ == "__main__":
         'F466N': 4.65, 'F470N': 4.71, 'F480M': 4.81,
     }
 
-    organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
-    filter_dirs = [os.path.join(output_base_dir, d) for d in os.listdir(output_base_dir) if os.path.isdir(os.path.join(output_base_dir, d))]
-    filter_names = [os.path.basename(d) for d in filter_dirs]
+    filter_to_paths = organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
+    filter_names = list(filter_to_paths.keys())
+    filter_dirs = [os.path.join(output_base_dir, f) for f in filter_names]
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)
     sorted_filter_dirs = [os.path.join(output_base_dir, f) for f in sorted_filters]
 
@@ -392,7 +391,7 @@ if __name__ == "__main__":
     print('Running stage 3 for the longest wavelength first...')
 
     log_long_filter = setup_filter_logger(sorted_filter_dirs[0])
-    stage3(sorted_filter_dirs[0], log_long_filter, target, reference_catalog=ref_cat, resample_params=None, config=config)
+    stage3(sorted_filter_dirs[0], log_long_filter, target, filter_to_paths[sorted_filters[0]], reference_catalog=ref_cat, resample_params=None, config=config)
     extract_data(sorted_filter_dirs[0], target, extract_settings, log_long_filter)
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
@@ -412,10 +411,11 @@ if __name__ == "__main__":
 
     if use_multiprocessing == True:
         log.info('Multiprocessing is being used. Beginning stage 3 for remaining filters...')
-        process_filters_parallel(sorted_filter_dirs[1:], target, long_cat, long_params, extract_settings, config=config)
+        process_filters_parallel(sorted_filter_dirs[1:], filter_to_paths, target, long_cat, long_params, extract_settings, config=config)
 
     else:
         for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stderr)):
             log_filter = setup_filter_logger(dir)
-            stage3(dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+            filter_name = os.path.basename(dir)
+            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config)
             extract_data(dir, target, extract_settings, log_filter)

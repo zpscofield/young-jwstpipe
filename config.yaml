@@ -1,6 +1,6 @@
 ## Basic setup 
 #------------------------------------
-crds_path: "/home/zpscofield/crds_cache" 
+crds_path: "~/crds_cache"
 # Path to the CRDS cache directory. 
 # Setting environment variables for the Calibration References Data System (CRDS) 
 # is outlined in the jwst pipeline documentation, however each script in this custom 
@@ -15,7 +15,7 @@ pipeline_directory: "."
 # - young_pipeline.sh
 # - utils/
 
-data_directory: "/Volumes/YOUNG6/XLSSC112_24.11.21"
+data_directory: "./data"
 # The directory containing your folder with uncalibrated data. 
 # The default is the current directory. This should not be the MAST directory
 # containing uncalibrated data. That should be a subfolder within this directory.
@@ -47,7 +47,7 @@ group_by_directory: false
 
 ## Stage 1 settings
 #------------------------------------
-stage1_nproc: 64
+stage1_nproc: 8
 # Number of processes to use for stage 1 of the pipeline. Note that this and all other 
 # stages and calibration steps, the number of processes will be reduced if the number 
 # of files is less than the user-specified nproc value.
@@ -67,26 +67,27 @@ jump_cores: "1"
 
 ## 1/f noise correction (RATE) settings
 #------------------------------------
-fnoise_nproc: 64
+fnoise_nproc: 8
 # Number of processes for 1/f noise correction from _rate.fits files.
 
 ## Stage 2 settings 
 #------------------------------------
-stage2_nproc: 64
+stage2_nproc: 8
 # Number of processes to use for stage 2 of the pipeline.
 
 skip_resample: true
-# Whether to skip the resampling step in stage 2. This is adviseable for saving time.
+# Whether to skip the resampling step in stage 2. This is advisable for saving time.
 #------------------------------------
 
 ## Wisp removal settings
 #------------------------------------
-wisp_directory: "/Volumes/YOUNG6/pipeline_branch_data/wisp-templates"
-# Path to the directory containing wisp templates 
-# (see https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne)
+wisp_directory: ""
+# Path to the directory containing wisp templates. Leave empty to skip wisp
+# subtraction (or add 'wisp_subtraction' to skip_steps below).
+# Download templates from https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne
 # *** USE VERSION 3 TEMPLATES ***
 
-wisp_nproc: 64
+wisp_nproc: 8
 # Number of processes to use for the wisp removal step. 
 
 plot_sky: false
@@ -96,7 +97,7 @@ plot_sky: false
 
 ## 1/f noise correction (CAL) settings
 #------------------------------------
-cfnoise_nproc: 64
+cfnoise_nproc: 8
 # Number of processes for 1/f noise correction from _cal.fits files. 
 
 # The "cfnoise" 1/f noise removal method is a gradient based, full exposure 1/f mitigation
@@ -109,7 +110,7 @@ cfnoise_nproc: 64
 
 ## Background subtraction settings
 #------------------------------------
-bkg_nproc: 64
+bkg_nproc: 8
 # Number of processes to use for the background subtraction step.
 #------------------------------------
 
@@ -201,9 +202,7 @@ extract_var_flat: false
 # about the two methods. By default, fnoise_correction is skipped since it can oversubtract faint
 # ICL signal in cluster fields. 
 
-# Certain steps cannot be skipped given a specific scenario. For example, if you have run the pipeline
-# and it has completed, you cannot skip the steps up to background subtraction. That is because the
-# original files have been moved and have already been processed.
+# By default, nothing is skipped. Uncomment any step below to skip it.
 skip_steps:
   # - download_uncal_references
   # - stage1
@@ -211,7 +210,7 @@ skip_steps:
   # - download_rate_references
   # - stage2
   # - wisp_subtraction
-  - cal_fnoise_reduction
+  # - cal_fnoise_reduction
   # - background_subtraction
   # - download_cal_references
   # - stage3

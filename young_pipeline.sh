@@ -29,6 +29,44 @@ delete_directory_if_exists() {
     fi
 }
 
+is_comma_list() {
+    [[ "$1" == *","* ]]
+}
+
+crds_bestrefs_for_uncal_input() {
+    local uncal_input="$1"
+
+    # Case A: comma-separated list of files
+    if is_comma_list "$uncal_input"; then
+        IFS=',' read -r -a files <<< "$uncal_input"
+        declare -A uniq_dirs
+        for f in "${files[@]}"; do
+            [ -n "$f" ] || continue
+            d=$(dirname "$f")
+            uniq_dirs["$d"]=1
+        done
+        for d in "${!uniq_dirs[@]}"; do
+            crds bestrefs --files "${d}/jw*uncal.fits" --sync-references=1
+        done
+        return 0
+    fi
+
+    # Case B: directory
+    if [ -d "$uncal_input" ]; then
+        crds bestrefs --files "${uncal_input}/jw*uncal.fits" --sync-references=1
+        return 0
+    fi
+
+    # Case C: single file
+    if [ -f "$uncal_input" ]; then
+        crds bestrefs --files "$uncal_input" --sync-references=1
+        return 0
+    fi
+
+    echo "[Error] UNCAL input not found: $uncal_input"
+    return 1
+}
+
 delete_stage3_directory_if_exists() {
     local dir="$1"
     local suffix="$2"
@@ -102,24 +140,13 @@ run_pipeline() {
     if ! should_skip_step "download_uncal_references"; then
         echo "« Downloading references for uncal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            IFS=',' read -r -a uncal_files <<< "$UNCAL_PATH" 
-            declare -A unique_dirs  
-            for file in "${uncal_files[@]}"; do
-                dir=$(dirname "$file")
-                unique_dirs["$dir"]=1
-            done
-            for dir in "${!unique_dirs[@]}"; do
-                crds bestrefs --files ${dir}/jw*uncal.fits --sync-references=1
-            done
-        elif [[ "$combine_observations" == "false" ]]; then
-            crds bestrefs --files ${UNCAL_PATH} --sync-references=1
-        fi
+        crds_bestrefs_for_uncal_input "$UNCAL_PATH" || exit 1
         echo ""
     else
         echo "[Download uncal references skipped]"
         echo ""
     fi
+
 
     if ! should_skip_step "stage1"; then
         if [ -f "$LOG_FILE1" ]; then
@@ -131,19 +158,25 @@ run_pipeline() {
         echo "==================="
         echo " Pipeline: stage 1 "
         echo "==================="
-        if [[ "$combine_observations" == "true" ]]; then
-            echo "Running pipeline in combined mode."
-        fi
-        if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
-        elif [[ "$combine_observations" == "false" ]]; then
-            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+
+        if is_comma_list "$UNCAL_PATH"; then
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" \
+                --nproc "$STAGE1_NPROC" \
+                --combined_mode \
+                --input_dir "$UNCAL_PATH" \
+                --output_dir "$OBS_DIR/stage1_output"
+        else
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" \
+                --nproc "$STAGE1_NPROC" \
+                --input_dir "$UNCAL_PATH" \
+                --output_dir "$OBS_DIR/stage1_output"
         fi
         echo ""
     else
         echo "[Pipeline Stage 1 skipped]"
         echo ""
     fi
+
 
     if ! should_skip_step "fnoise_correction"; then
         if [ -f "$LOG_FILEF" ]; then

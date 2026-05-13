@@ -71,6 +71,44 @@ def save_config(config: dict) -> None:
         yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
 
 
+def validate_config(config: dict) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings) for the given config. Errors block running."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    data_dir = Path(str(config.get("data_directory", "")).strip()).expanduser()
+    if not str(data_dir):
+        errors.append("Data directory is empty.")
+    elif not data_dir.exists():
+        errors.append(f"Data directory does not exist: {data_dir}")
+    else:
+        has_uncal = any(data_dir.rglob("*_uncal.fits"))
+        if not has_uncal:
+            warnings.append(
+                f"No *_uncal.fits files found in {data_dir} (search is recursive). "
+                "Download some first or point to a different directory."
+            )
+
+    skip = set(config.get("skip_steps") or [])
+    if "wisp_subtraction" not in skip:
+        wisp = str(config.get("wisp_directory", "")).strip()
+        if not wisp:
+            warnings.append(
+                "WISP templates directory is empty but wisp_subtraction is not skipped. "
+                "Either set a path or add 'wisp_subtraction' to the skipped steps."
+            )
+        elif not Path(wisp).expanduser().exists():
+            warnings.append(f"WISP templates directory does not exist: {wisp}")
+
+    crds = str(config.get("crds_path", "")).strip()
+    if crds and not Path(crds).expanduser().exists():
+        warnings.append(
+            f"CRDS cache path does not exist yet: {crds}. The pipeline will create it on first use."
+        )
+
+    return errors, warnings
+
+
 def run_pipeline_streaming() -> int:
     """Run young_pipeline.sh and stream its output into the UI. Returns exit code."""
     with st.status("Running pipeline…", expanded=True, state="running") as status:
@@ -511,13 +549,21 @@ for key, value in current.items():
 
 
 st.divider()
+
+errors, warnings = validate_config(new_config)
+for message in warnings:
+    st.warning(message)
+for message in errors:
+    st.error(message)
+
 left, middle, right = st.columns([1, 1, 3])
 with left:
     if st.button("Save config.yaml"):
         save_config(new_config)
         st.success(f"Saved {CONFIG_PATH}")
 with middle:
-    if st.button("Save & Run pipeline ▶", type="primary"):
+    run_clicked = st.button("Save & Run pipeline ▶", type="primary", disabled=bool(errors))
+    if run_clicked:
         save_config(new_config)
         st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
         run_pipeline_streaming()

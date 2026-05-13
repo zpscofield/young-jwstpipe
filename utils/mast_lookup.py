@@ -1,10 +1,11 @@
 """MAST search helpers for JWST NIRCam imaging observations.
 
-Two ways to find data:
-- search_by_target("Abell 2744")  — name lookup plus cone search
-- search_by_proposal(2756)        — all observations in a program
+Three ways to find data:
+- search_by_target("Abell 2744")        — name lookup plus cone search
+- search_by_coordinates(ra_deg, dec_deg) — cone search at coordinates
+- search_by_proposal(2756)               — all observations in a program
 
-Both return an astropy Table of observations, already filtered to NIRCam
+All return an astropy Table of observations, already filtered to NIRCam
 imaging and deduplicated. Pass that table to summarize() for a
 human-readable list, or to mast_download.download_uncal() to fetch the
 uncalibrated files.
@@ -135,14 +136,55 @@ def search_by_target(target_name: str, radius_arcsec: float = DEFAULT_CONE_RADIU
     return _dedupe(combined)
 
 
+def search_by_coordinates(ra_deg: float, dec_deg: float, radius_arcsec: float = DEFAULT_CONE_RADIUS_ARCSEC):
+    """Cone search for NIRCam imaging observations at the given coordinates."""
+    Observations, SkyCoord, u = _import_astroquery()
+    coord = SkyCoord(float(ra_deg) * u.deg, float(dec_deg) * u.deg)
+    matches = Observations.query_region(coord, radius=float(radius_arcsec) * u.arcsec)
+    return _dedupe(_filter_nircam_imaging(matches))
+
+
 def search_by_proposal(proposal_id):
-    """Return NIRCam imaging observations from a single JWST proposal."""
+    """Return NIRCam imaging observations from one or more JWST proposals.
+
+    proposal_id may be:
+      - a single ID (int or str): "2756"
+      - a list/tuple of IDs: ["2756", "1837"]
+      - a comma- or space-separated string: "2756, 1837"
+    """
     Observations, _SkyCoord, _u = _import_astroquery()
-    observations = Observations.query_criteria(
-        obs_collection="JWST",
-        proposal_id=str(proposal_id),
-    )
-    return _dedupe(_filter_nircam_imaging(observations))
+    ids = _parse_proposal_ids(proposal_id)
+    if not ids:
+        raise ValueError("No proposal IDs provided.")
+
+    per_proposal = []
+    for pid in ids:
+        observations = Observations.query_criteria(
+            obs_collection="JWST",
+            proposal_id=pid,
+        )
+        per_proposal.append(_filter_nircam_imaging(observations))
+
+    non_empty = [t for t in per_proposal if len(t) > 0]
+    if not non_empty:
+        return per_proposal[0]  # an empty table of the right type
+    if len(non_empty) == 1:
+        return _dedupe(non_empty[0])
+
+    from astropy.table import vstack
+    combined = vstack(non_empty, metadata_conflicts="silent")
+    return _dedupe(combined)
+
+
+def _parse_proposal_ids(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    # Split on commas or whitespace.
+    parts = [p.strip() for chunk in text.split(",") for p in chunk.split()]
+    return [p for p in parts if p]
 
 
 def summarize(observations) -> list[dict]:

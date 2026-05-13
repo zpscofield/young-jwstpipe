@@ -23,10 +23,20 @@ commits.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import streamlit as st
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
+from mast_lookup import (
+    search_by_target,
+    search_by_coordinates,
+    search_by_proposal,
+    summarize,
+)
+from mast_download import download_uncal
 
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
@@ -72,12 +82,196 @@ new_config = dict(current)
 
 # 1. Data source
 st.header("1. Data source")
-st.info("MAST target lookup and program-ID download arrive in the next commit. For now, point the pipeline at a directory that already contains uncal files.")
-new_config["data_directory"] = st.text_input(
-    "Data directory (where uncal.fits files live)",
-    value=_get(current, "data_directory", "./data"),
-    help="The pipeline searches this directory recursively for *_uncal.fits files.",
+data_source_mode = st.radio(
+    "How do you want to provide data?",
+    [
+        "MAST lookup by target name",
+        "MAST lookup by RA / Dec",
+        "MAST lookup by program ID",
+        "Use existing directory",
+    ],
+    horizontal=True,
 )
+
+
+def _show_search_results(observations, download_dir: str, session_key: str):
+    """Display a summary table and a Download button for an observations result."""
+    summary_rows = summarize(observations)
+    total_frames = sum(row["n_frames"] for row in summary_rows)
+    st.markdown(
+        f"**Found {len(observations)} observations in "
+        f"{len({row['program'] for row in summary_rows})} programs ({total_frames} frames).**"
+    )
+    st.dataframe(summary_rows, hide_index=True, use_container_width=True)
+
+    if st.button("Download uncal files", key=f"download_{session_key}", type="primary"):
+        progress_bar = st.progress(0.0, text="Starting…")
+        status_text = st.empty()
+
+        def on_progress(i, total, filename, status):
+            progress_bar.progress(i / total, text=f"[{i}/{total}] {filename} ({status})")
+            if status == "failed":
+                status_text.warning(f"Failed: {filename}")
+
+        try:
+            result = download_uncal(observations, download_dir, progress=on_progress)
+        except Exception as exc:
+            st.error(f"Download failed: {exc}")
+            return None
+
+        progress_bar.empty()
+        n_ok = len(result["downloaded"])
+        n_fail = len(result["failed"])
+        if n_fail:
+            st.warning(f"Downloaded {n_ok} files to {result['path']}, {n_fail} failed.")
+            with st.expander("Failed files"):
+                st.write(result["failed"])
+        else:
+            st.success(f"Downloaded {n_ok} files to {result['path']}")
+        return str(result["path"])
+    return None
+
+
+if data_source_mode == "MAST lookup by target name":
+    col_t, col_r, col_d = st.columns([2, 1, 2])
+    with col_t:
+        target_name = st.text_input("Target name", placeholder="e.g. Abell 2744")
+    with col_r:
+        target_radius = st.number_input(
+            "Search radius (arcsec)",
+            min_value=1.0,
+            max_value=3600.0,
+            value=60.0,
+            step=10.0,
+            key="target_radius",
+        )
+    with col_d:
+        target_dest = st.text_input(
+            "Download to",
+            value=_get(current, "data_directory", "./data"),
+            key="target_dest",
+        )
+
+    if st.button("Search MAST", key="search_target"):
+        if not target_name.strip():
+            st.error("Enter a target name first.")
+        else:
+            with st.spinner(f"Searching MAST for '{target_name}'…"):
+                try:
+                    st.session_state["mast_obs_target"] = search_by_target(
+                        target_name.strip(), radius_arcsec=float(target_radius)
+                    )
+                except Exception as exc:
+                    st.session_state.pop("mast_obs_target", None)
+                    st.error(f"MAST search failed: {exc}")
+
+    if "mast_obs_target" in st.session_state:
+        downloaded_path = _show_search_results(
+            st.session_state["mast_obs_target"], target_dest, "target"
+        )
+        if downloaded_path:
+            st.session_state["resolved_data_directory"] = downloaded_path
+
+    new_config["data_directory"] = st.session_state.get("resolved_data_directory", target_dest)
+
+elif data_source_mode == "MAST lookup by RA / Dec":
+    col_ra, col_dec, col_r, col_d = st.columns([1, 1, 1, 2])
+    with col_ra:
+        ra_deg = st.number_input(
+            "RA (deg)",
+            min_value=0.0,
+            max_value=360.0,
+            value=0.0,
+            step=0.001,
+            format="%.6f",
+            key="coord_ra",
+        )
+    with col_dec:
+        dec_deg = st.number_input(
+            "Dec (deg)",
+            min_value=-90.0,
+            max_value=90.0,
+            value=0.0,
+            step=0.001,
+            format="%.6f",
+            key="coord_dec",
+        )
+    with col_r:
+        coord_radius = st.number_input(
+            "Search radius (arcsec)",
+            min_value=1.0,
+            max_value=3600.0,
+            value=60.0,
+            step=10.0,
+            key="coord_radius",
+        )
+    with col_d:
+        coord_dest = st.text_input(
+            "Download to",
+            value=_get(current, "data_directory", "./data"),
+            key="coord_dest",
+        )
+
+    if st.button("Search MAST", key="search_coord"):
+        with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):
+            try:
+                st.session_state["mast_obs_coord"] = search_by_coordinates(
+                    ra_deg, dec_deg, radius_arcsec=float(coord_radius)
+                )
+            except Exception as exc:
+                st.session_state.pop("mast_obs_coord", None)
+                st.error(f"MAST search failed: {exc}")
+
+    if "mast_obs_coord" in st.session_state:
+        downloaded_path = _show_search_results(
+            st.session_state["mast_obs_coord"], coord_dest, "coord"
+        )
+        if downloaded_path:
+            st.session_state["resolved_data_directory"] = downloaded_path
+
+    new_config["data_directory"] = st.session_state.get("resolved_data_directory", coord_dest)
+
+elif data_source_mode == "MAST lookup by program ID":
+    col_p, col_d = st.columns([2, 3])
+    with col_p:
+        proposal_input = st.text_input(
+            "Program ID(s)",
+            placeholder="e.g. 2756, or 2756, 1837 for multiple",
+            help="One or more program IDs, separated by commas or spaces.",
+        )
+    with col_d:
+        prop_dest = st.text_input(
+            "Download to",
+            value=_get(current, "data_directory", "./data"),
+            key="prop_dest",
+        )
+
+    if st.button("Search MAST", key="search_proposal"):
+        if not proposal_input.strip():
+            st.error("Enter at least one program ID first.")
+        else:
+            with st.spinner(f"Searching MAST for proposal(s) {proposal_input}…"):
+                try:
+                    st.session_state["mast_obs_proposal"] = search_by_proposal(proposal_input.strip())
+                except Exception as exc:
+                    st.session_state.pop("mast_obs_proposal", None)
+                    st.error(f"MAST search failed: {exc}")
+
+    if "mast_obs_proposal" in st.session_state:
+        downloaded_path = _show_search_results(
+            st.session_state["mast_obs_proposal"], prop_dest, "proposal"
+        )
+        if downloaded_path:
+            st.session_state["resolved_data_directory"] = downloaded_path
+
+    new_config["data_directory"] = st.session_state.get("resolved_data_directory", prop_dest)
+
+else:  # Use existing directory
+    new_config["data_directory"] = st.text_input(
+        "Data directory (where uncal.fits files live)",
+        value=_get(current, "data_directory", "./data"),
+        help="The pipeline searches this directory recursively for *_uncal.fits files.",
+    )
 
 
 # 2. Output & grouping

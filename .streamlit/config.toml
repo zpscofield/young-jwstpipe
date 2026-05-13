@@ -1,0 +1,9 @@
+[server]
+# Don't try to open a browser when starting (matters on SSH/headless servers).
+headless = true
+# Default port. Match this to your SSH -L forward.
+port = 8501
+
+[browser]
+# Don't phone home with usage stats.
+gatherUsageStats = false

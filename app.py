@@ -1,0 +1,287 @@
+"""Streamlit front-end for the YOUNG JWST calibration pipeline.
+
+Local usage:
+    streamlit run app.py
+    # then open http://localhost:8501
+
+Running on a remote machine over SSH (the common case):
+    # On the remote machine:
+    streamlit run app.py
+    # On your laptop, in a separate terminal:
+    ssh -L 8501:localhost:8501 you@remote
+    # then open http://localhost:8501 in your laptop's browser
+
+The included .streamlit/config.toml sets headless = true so Streamlit
+will not try to launch a browser on the remote machine.
+
+This skeleton handles the config side: it reads config.yaml, shows every
+setting as a form widget, and writes the chosen values back when you
+click Save. The data-source section (MAST lookup, program-ID download,
+existing directory) and the Save & Run button are added in later
+commits.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import streamlit as st
+import yaml
+
+
+CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+PIPELINE_STEPS = [
+    "download_uncal_references",
+    "stage1",
+    "fnoise_correction",
+    "download_rate_references",
+    "stage2",
+    "wisp_subtraction",
+    "cal_fnoise_reduction",
+    "background_subtraction",
+    "download_cal_references",
+    "stage3",
+]
+
+
+def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {}
+    with open(CONFIG_PATH, "r") as f:
+        return yaml.safe_load(f) or {}
+
+
+def save_config(config: dict) -> None:
+    with open(CONFIG_PATH, "w") as f:
+        yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+
+
+def _get(config: dict, key: str, default):
+    value = config.get(key)
+    return value if value is not None else default
+
+
+st.set_page_config(page_title="YOUNG JWST Pipeline", layout="wide")
+st.title("YOUNG JWST Calibration Pipeline")
+st.caption(f"Editing {CONFIG_PATH}")
+
+current = load_config()
+new_config = dict(current)
+
+
+# 1. Data source
+st.header("1. Data source")
+st.info("MAST target lookup and program-ID download arrive in the next commit. For now, point the pipeline at a directory that already contains uncal files.")
+new_config["data_directory"] = st.text_input(
+    "Data directory (where uncal.fits files live)",
+    value=_get(current, "data_directory", "./data"),
+    help="The pipeline searches this directory recursively for *_uncal.fits files.",
+)
+
+
+# 2. Output & grouping
+st.header("2. Output & grouping")
+col1, col2 = st.columns(2)
+with col1:
+    new_config["output_directory"] = st.text_input(
+        "Output directory",
+        value=_get(current, "output_directory", "."),
+    )
+    new_config["custom_name"] = st.text_input(
+        "Custom name (used when 'combine all' is selected)",
+        value=_get(current, "custom_name", "Combined_Observation"),
+    )
+with col2:
+    grouping_modes = ["By program ID", "By subdirectory", "Combine all"]
+    if _get(current, "group_by_directory", False):
+        default_mode = "By subdirectory"
+    elif _get(current, "combine_observations", False):
+        default_mode = "Combine all"
+    else:
+        default_mode = "By program ID"
+    grouping_mode = st.radio(
+        "Grouping",
+        grouping_modes,
+        index=grouping_modes.index(default_mode),
+        help="How to split your uncal files into independent pipeline runs.",
+    )
+    new_config["group_by_directory"] = grouping_mode == "By subdirectory"
+    new_config["combine_observations"] = grouping_mode == "Combine all"
+
+
+# 3. Calibration steps (skip toggles)
+st.header("3. Calibration steps")
+st.caption("Check a step to skip it. Unchecked steps run normally.")
+current_skip = set(_get(current, "skip_steps", []) or [])
+skip_cols = st.columns(2)
+new_skip = []
+for i, step in enumerate(PIPELINE_STEPS):
+    with skip_cols[i % 2]:
+        if st.checkbox(f"Skip {step}", value=step in current_skip, key=f"skip_{step}"):
+            new_skip.append(step)
+new_config["skip_steps"] = new_skip
+
+new_config["wisp_directory"] = st.text_input(
+    "WISP templates directory (required for wisp_subtraction)",
+    value=_get(current, "wisp_directory", ""),
+    help="Download v3 templates from https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne",
+)
+
+
+# 4. Performance
+st.header("4. Performance (parallel workers per stage)")
+nproc_cols = st.columns(3)
+nproc_fields = [
+    ("stage1_nproc", "Stage 1"),
+    ("stage2_nproc", "Stage 2"),
+    ("fnoise_nproc", "1/f noise (rate)"),
+    ("wisp_nproc", "WISP subtraction"),
+    ("cfnoise_nproc", "1/f noise (cal)"),
+    ("bkg_nproc", "Background subtraction"),
+]
+for i, (key, label) in enumerate(nproc_fields):
+    with nproc_cols[i % 3]:
+        new_config[key] = st.number_input(
+            f"{label} (nproc)",
+            min_value=1,
+            max_value=128,
+            value=int(_get(current, key, 8)),
+            step=1,
+        )
+
+with st.expander("Advanced stage 3 options"):
+    new_config["stage3_use_multiprocessing"] = st.checkbox(
+        "Use multiprocessing across filters in stage 3",
+        value=bool(_get(current, "stage3_use_multiprocessing", True)),
+    )
+    new_config["min_processes"] = st.number_input(
+        "Minimum parallel processes for stage 3",
+        min_value=1,
+        max_value=32,
+        value=int(_get(current, "min_processes", 8)),
+    )
+    new_config["outlier_in_memory"] = st.checkbox(
+        "Outlier detection in memory",
+        value=bool(_get(current, "outlier_in_memory", True)),
+    )
+    new_config["resample_in_memory"] = st.checkbox(
+        "Resample in memory",
+        value=bool(_get(current, "resample_in_memory", True)),
+    )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        new_config["pixel_scale"] = st.number_input(
+            "Pixel scale (arcsec)",
+            min_value=0.001,
+            max_value=1.0,
+            value=float(_get(current, "pixel_scale", 0.02)),
+            step=0.005,
+            format="%.4f",
+        )
+        new_config["pixfrac"] = st.number_input(
+            "pixfrac",
+            min_value=0.01,
+            max_value=1.0,
+            value=float(_get(current, "pixfrac", 0.75)),
+            step=0.05,
+            format="%.2f",
+        )
+    with col_b:
+        new_config["rotation"] = st.number_input(
+            "Rotation (degrees; 0 = North up)",
+            value=float(_get(current, "rotation", 0.0)),
+            step=1.0,
+            format="%.2f",
+        )
+        new_config["res_kernel"] = st.selectbox(
+            "Resample kernel",
+            ["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"],
+            index=["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"].index(
+                _get(current, "res_kernel", "square")
+            ),
+        )
+
+with st.expander("Tweakreg and skymatch"):
+    new_config["external_reference"] = st.text_input(
+        "External reference catalog (CSV with RA,DEC, or 'GAIADR3')",
+        value=_get(current, "external_reference", ""),
+    )
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        new_config["starfinder"] = st.selectbox(
+            "Starfinder",
+            ["segmentation", "iraf", "dao"],
+            index=["segmentation", "iraf", "dao"].index(
+                _get(current, "starfinder", "segmentation")
+            ),
+        )
+        new_config["snr_threshold"] = st.number_input(
+            "SNR threshold",
+            min_value=0.1,
+            max_value=100.0,
+            value=float(_get(current, "snr_threshold", 5.0)),
+            step=0.5,
+        )
+    with col_t2:
+        new_config["abs_fitgeometry"] = st.selectbox(
+            "abs_fitgeometry",
+            ["rshift", "shift", "rscale", "general"],
+            index=["rshift", "shift", "rscale", "general"].index(
+                _get(current, "abs_fitgeometry", "rshift")
+            ),
+        )
+        new_config["fitgeometry"] = st.selectbox(
+            "fitgeometry",
+            ["rshift", "shift", "rscale", "general"],
+            index=["rshift", "shift", "rscale", "general"].index(
+                _get(current, "fitgeometry", "rshift")
+            ),
+        )
+    new_config["skymethod"] = st.selectbox(
+        "skymethod",
+        ["match", "globalmin", "localmin", "globalmin+match"],
+        index=["match", "globalmin", "localmin", "globalmin+match"].index(
+            _get(current, "skymethod", "match")
+        ),
+    )
+
+with st.expander("Extract i2d extensions"):
+    col_e1, col_e2 = st.columns(2)
+    with col_e1:
+        new_config["extract_sci"] = st.checkbox("Extract SCI", value=bool(_get(current, "extract_sci", True)))
+        new_config["extract_err"] = st.checkbox("Extract ERR", value=bool(_get(current, "extract_err", True)))
+        new_config["extract_wht"] = st.checkbox("Extract WHT", value=bool(_get(current, "extract_wht", True)))
+        new_config["extract_con"] = st.checkbox("Extract CON", value=bool(_get(current, "extract_con", False)))
+    with col_e2:
+        new_config["extract_var_poisson"] = st.checkbox("Extract VAR_POISSON", value=bool(_get(current, "extract_var_poisson", False)))
+        new_config["extract_var_rnoise"] = st.checkbox("Extract VAR_RNOISE", value=bool(_get(current, "extract_var_rnoise", False)))
+        new_config["extract_var_flat"] = st.checkbox("Extract VAR_FLAT", value=bool(_get(current, "extract_var_flat", False)))
+
+
+# 5. CRDS
+st.header("5. CRDS")
+new_config["crds_path"] = st.text_input(
+    "CRDS cache path",
+    value=_get(current, "crds_path", "~/crds_cache"),
+)
+new_config["crds_server_url"] = st.text_input(
+    "CRDS server URL",
+    value=_get(current, "crds_server_url", "https://jwst-crds.stsci.edu"),
+)
+
+
+# Preserve any keys we didn't render so we don't accidentally drop them.
+for key, value in current.items():
+    if key not in new_config:
+        new_config[key] = value
+
+
+st.divider()
+left, right = st.columns([1, 3])
+with left:
+    if st.button("Save config.yaml", type="primary"):
+        save_config(new_config)
+        st.success(f"Saved {CONFIG_PATH}")
+with right:
+    st.caption("Save & Run will appear once the data-source and run-trigger code lands.")

@@ -132,11 +132,6 @@ run_pipeline() {
 
 
     if ! should_skip_step "stage1"; then
-        if [ -f "$LOG_FILE1" ]; then
-            echo "[Existing pipeline_stage1.log file deleted]"
-            echo ""
-            rm "$LOG_FILE1"
-        fi
         delete_directory_if_exists "$OBS_DIR/stage1_output"
         echo "==================="
         echo " Pipeline: stage 1 "
@@ -162,11 +157,6 @@ run_pipeline() {
 
 
     if ! should_skip_step "fnoise_correction"; then
-        if [ -f "$LOG_FILEF" ]; then
-            echo "[Existing pipeline_fnoise.log file deleted]"
-            echo ""
-            rm "$LOG_FILEF"
-        fi
         echo "« Correcting 1/f noise »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         echo "Accessing flat files before beginning calibration..."
@@ -192,11 +182,6 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "stage2"; then
-        if [ -f "$LOG_FILE2" ]; then
-            echo "[Existing pipeline_stage2.log file deleted]"
-            echo ""
-            rm "$LOG_FILE2"
-        fi
         delete_directory_if_exists "$OBS_DIR/stage2_output"
         echo "===================="
         echo " Pipeline - stage 2 "
@@ -209,11 +194,6 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "wisp_subtraction"; then
-        if [ -f "$LOG_FILEW" ]; then
-            echo "[Existing pipeline_wisp.log file deleted]"
-            echo ""
-            rm "$LOG_FILEW"
-        fi
         echo "« Subtracting wisps from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         python "$PIPELINE_DIR/utils/subtract_wisp.py" --files $OBS_DIR/stage2_output/jw*cal.fits --wisp_dir "$WISP_DIR" --output_dir "$OBS_DIR/stage2_output" --suffix "_wisp" --nproc "$WISP_NPROC"
@@ -224,11 +204,6 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "cal_fnoise_reduction"; then
-        if [ -f "$LOG_FILECF" ]; then
-            echo "[Existing pipeline_cfnoise.log file deleted]"
-            echo ""
-            rm "$LOG_FILECF"
-        fi
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
@@ -251,11 +226,6 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "background_subtraction"; then
-        if [ -f "$LOG_FILEB" ]; then
-            echo "[Existing pipeline_bkg.log file deleted]"
-            echo ""
-            rm "$LOG_FILEB"
-        fi
         echo "« Subtracting background from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
@@ -301,11 +271,6 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "stage3"; then
-        if [ -f "$LOG_FILE3" ]; then
-            echo "[Existing pipeline_stage3.log file deleted]"
-            echo ""
-            rm "$LOG_FILE3"
-        fi
         delete_stage3_directory_if_exists "$OBS_DIR/stage3_output"
         echo "===================="
         echo " Pipeline - stage 3"

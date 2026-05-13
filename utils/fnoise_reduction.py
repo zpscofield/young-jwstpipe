@@ -18,6 +18,8 @@ from photutils.segmentation import detect_threshold
 from photutils.segmentation import detect_sources as phot_detect_sources
 from scipy.ndimage import binary_dilation
 
+from log_utils import archive_existing_log
+
 
 def setup_logger(output_dir):
     """
@@ -25,7 +27,8 @@ def setup_logger(output_dir):
     """
     parent_dir = os.path.dirname(output_dir)
     log_file_path = os.path.join(parent_dir, "logs/pipeline_cfnoise.log")
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    archive_existing_log(log_file_path)
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log = logging.getLogger(__name__)

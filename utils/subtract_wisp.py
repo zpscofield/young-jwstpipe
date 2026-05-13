@@ -60,6 +60,8 @@ from photutils.segmentation import detect_sources, detect_threshold
 from scipy.ndimage import binary_dilation, generate_binary_structure
 from tqdm.auto import tqdm
 
+from log_utils import archive_existing_log
+
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
@@ -69,7 +71,8 @@ def setup_logger(output_dir):
     """
     parent_dir = os.path.dirname(output_dir)
     log_file_path = os.path.join(parent_dir, "logs/pipeline_wisp.log")
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    archive_existing_log(log_file_path)
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log = logging.getLogger(__name__)

@@ -11,6 +11,8 @@ import argparse
 from multiprocessing import Pool, cpu_count
 from contextlib import contextmanager
 
+from log_utils import archive_existing_log
+
 
 @contextmanager
 def redirect_output_to_file(log_file):
@@ -47,6 +49,7 @@ def setup_logger(output_dir):
     parent_dir = os.path.dirname(output_dir.rstrip("/"))
     log_file_path = os.path.join(parent_dir, "logs", "pipeline_stage1.log")
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    archive_existing_log(log_file_path)
 
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

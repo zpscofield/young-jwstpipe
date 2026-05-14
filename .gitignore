@@ -18,3 +18,7 @@ logs/
 
 # Streamlit state
 .streamlit/secrets.toml
+.streamlit/.*.log
+
+# Local cloudflared binary downloaded by share.sh
+bin/

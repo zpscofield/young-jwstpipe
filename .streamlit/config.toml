@@ -1,7 +1,6 @@
 [server]
-# Don't try to open a browser when starting (matters on SSH/headless servers).
-headless = true
-# Default port. Match this to your SSH -L forward.
+# Default port. start.sh and share.sh both bind to this.
+# When you run share.sh, headless mode is set explicitly on the command line.
 port = 8501
 
 [browser]

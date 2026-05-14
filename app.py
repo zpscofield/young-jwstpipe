@@ -152,16 +152,33 @@ def _get(config: dict, key: str, default):
     return value if value is not None else default
 
 
-st.set_page_config(page_title="YOUNG JWST Pipeline", layout="wide")
-st.title("YOUNG JWST Calibration Pipeline")
-st.caption(f"Editing {CONFIG_PATH}")
+st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
+
+# Header banner.
+banner_col1, banner_col2 = st.columns([1, 2])
+with banner_col1:
+    st.image(
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Webb%27s_First_Deep_Field_%28adjusted%29.jpg/640px-Webb%27s_First_Deep_Field_%28adjusted%29.jpg",
+        use_container_width=True,
+        caption="SMACS 0723, JWST first deep field (NASA/STScI, public domain)",
+    )
+with banner_col2:
+    st.title("YOUNG JWST Calibration Pipeline")
+    st.markdown(
+        "Search MAST for JWST NIRCam data, configure the calibration pipeline, "
+        "and run it — all from this page."
+    )
+    st.caption(f"Editing {CONFIG_PATH}")
 
 current = load_config()
 new_config = dict(current)
 
 
+st.divider()
+
+
 # 1. Data source
-st.header("1. Data source")
+st.header("🔭 1. Data source")
 data_source_mode = st.radio(
     "How do you want to provide data?",
     [
@@ -435,7 +452,7 @@ else:  # Use existing directory
 
 
 # 2. Output & grouping
-st.header("2. Output & grouping")
+st.header("📁 2. Output & grouping")
 col1, col2 = st.columns(2)
 with col1:
     new_config["output_directory"] = st.text_input(
@@ -465,7 +482,7 @@ with col2:
 
 
 # 3. Calibration steps (skip toggles)
-st.header("3. Calibration steps")
+st.header("⚙️ 3. Calibration steps")
 st.caption("Check a step to skip it. Unchecked steps run normally.")
 current_skip = set(_get(current, "skip_steps", []) or [])
 skip_cols = st.columns(2)
@@ -484,7 +501,7 @@ new_config["wisp_directory"] = st.text_input(
 
 
 # 4. Performance
-st.header("4. Performance (parallel workers per stage)")
+st.header("⚡ 4. Performance (parallel workers per stage)")
 nproc_cols = st.columns(3)
 nproc_fields = [
     ("stage1_nproc", "Stage 1"),
@@ -614,7 +631,7 @@ with st.expander("Extract i2d extensions"):
 
 
 # 5. CRDS
-st.header("5. CRDS")
+st.header("🛰️ 5. CRDS")
 new_config["crds_path"] = st.text_input(
     "CRDS cache path",
     value=_get(current, "crds_path", "~/crds_cache"),

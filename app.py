@@ -215,6 +215,49 @@ def validate_config(config: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+LOG_PANEL_HEIGHT_PX = 500
+
+
+def _log_panel_html(lines: list[str], max_height_px: int = LOG_PANEL_HEIGHT_PX) -> str:
+    body = (
+        "\n".join(lines)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body {{ margin: 0; padding: 0; }}
+    #log {{
+      height: {max_height_px}px;
+      max-height: {max_height_px}px;
+      overflow-y: auto;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.85rem;
+      line-height: 1.45;
+      padding: 12px;
+      background: #0d1117;
+      color: #d1d9e0;
+      border-radius: 6px;
+      white-space: pre;
+      box-sizing: border-box;
+    }}
+  </style>
+</head>
+<body>
+  <pre id="log">{body}</pre>
+  <script>
+    // Auto-scroll to the bottom so the newest line is always visible.
+    const el = document.getElementById('log');
+    if (el) el.scrollTop = el.scrollHeight;
+  </script>
+</body>
+</html>"""
+
+
 def run_pipeline_streaming() -> int:
     """Run young_pipeline.sh and stream its output into the UI. Returns exit code."""
     with st.status("Running pipeline…", expanded=True, state="running") as status:
@@ -230,13 +273,17 @@ def run_pipeline_streaming() -> int:
             bufsize=1,
         )
 
+        def _render_log():
+            with log_placeholder.container():
+                components.html(
+                    _log_panel_html(lines[-MAX_LOG_LINES:]),
+                    height=LOG_PANEL_HEIGHT_PX + 20,
+                )
+
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
-            log_placeholder.code(
-                "\n".join(lines[-MAX_LOG_LINES:]),
-                language=None,
-            )
+            _render_log()
 
         return_code = process.wait()
 

@@ -273,7 +273,7 @@ new_config = dict(current)
 # st.divider()
 # st.caption(f"Editing {CONFIG_PATH}")
 st.markdown(
-    f'<p style="text-align: right; font-size: 0.8rem; color: gray;">Editing {CONFIG_PATH}</p>',
+    f'<p style="text-align: center; font-size: 0.8rem; color: gray;">Editing {CONFIG_PATH}</p>',
     unsafe_allow_html=True,
 )
 

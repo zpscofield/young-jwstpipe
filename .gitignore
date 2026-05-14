@@ -19,6 +19,7 @@ logs/
 # Streamlit state
 .streamlit/secrets.toml
 .streamlit/.*.log
+.streamlit/.lhr_known_hosts
 
-# Local cloudflared binary downloaded by share.sh
+# Local cloudflared binary (kept for backwards compat; share.sh now uses localhost.run)
 bin/

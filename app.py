@@ -36,6 +36,8 @@ from mast_lookup import (
     search_by_coordinates,
     search_by_proposal,
     summarize,
+    filter_by_summary_rows,
+    resolve_target,
 )
 from mast_download import download_uncal
 
@@ -172,16 +174,35 @@ data_source_mode = st.radio(
 
 
 def _show_search_results(observations, download_dir: str, session_key: str):
-    """Display a summary table and a Download button for an observations result."""
+    """Display a summary table with selectable rows and a Download button."""
     summary_rows = summarize(observations)
     total_frames = sum(row["n_frames"] for row in summary_rows)
     st.markdown(
         f"**Found {len(observations)} observations in "
         f"{len({row['program'] for row in summary_rows})} programs ({total_frames} frames).**"
     )
-    st.dataframe(summary_rows, hide_index=True, use_container_width=True)
+    st.caption("Tick rows to download just those program/filter combinations. Leave nothing ticked to download everything.")
 
-    if st.button("Download uncal files", key=f"download_{session_key}", type="primary"):
+    event = st.dataframe(
+        summary_rows,
+        hide_index=True,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+        key=f"select_{session_key}",
+    )
+    selected_indices = list(event.selection.rows) if event and event.selection else []
+
+    if selected_indices:
+        selected_rows = [summary_rows[i] for i in selected_indices]
+        to_download = filter_by_summary_rows(observations, selected_rows)
+        selected_frames = sum(summary_rows[i]["n_frames"] for i in selected_indices)
+        button_label = f"Download {selected_frames} selected frames"
+    else:
+        to_download = observations
+        button_label = f"Download all {total_frames} frames"
+
+    if st.button(button_label, key=f"download_{session_key}", type="primary"):
         progress_bar = st.progress(0.0, text="Starting…")
         status_text = st.empty()
 
@@ -191,7 +212,7 @@ def _show_search_results(observations, download_dir: str, session_key: str):
                 status_text.warning(f"Failed: {filename}")
 
         try:
-            result = download_uncal(observations, download_dir, progress=on_progress)
+            result = download_uncal(to_download, download_dir, progress=on_progress)
         except Exception as exc:
             st.error(f"Download failed: {exc}")
             return None

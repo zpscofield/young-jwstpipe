@@ -187,6 +187,35 @@ def _parse_proposal_ids(value) -> list[str]:
     return [p for p in parts if p]
 
 
+def filter_by_summary_rows(observations, selected_summary_rows):
+    """Filter an observations table down to entries matching the given summary rows.
+
+    selected_summary_rows is a subset of what summarize() returned (each row
+    has 'program' and 'filters' keys). Returns the matching subset of
+    observations.
+    """
+    if not selected_summary_rows:
+        return observations
+    keys = {(row["program"], row["filters"]) for row in selected_summary_rows}
+    keep = []
+    for i, obs_row in enumerate(observations):
+        program = _norm(_row_value(obs_row, "proposal_id", "proposalid", "proposal")) or "unknown"
+        filters = _norm(_row_value(obs_row, "filters", "filter")) or "unknown filter"
+        if (program, filters) in keys:
+            keep.append(i)
+    return observations[keep]
+
+
+def resolve_target(target_name: str) -> tuple[float, float] | None:
+    """Resolve a target name to (RA, Dec) in degrees. Returns None on failure."""
+    try:
+        _Observations, SkyCoord, _u = _import_astroquery()
+        coord = SkyCoord.from_name(target_name)
+        return float(coord.ra.deg), float(coord.dec.deg)
+    except Exception:
+        return None
+
+
 def summarize(observations) -> list[dict]:
     """Group rows by program and filter for human-readable display.
 

@@ -400,8 +400,9 @@ def _render_aladin(
   </script>
 </body>
 </html>"""
-    components.html(html, height=height)
-
+    # components.html(html, height=height)
+    st.iframe(html, height=height)
+    
     _, mid, _ = st.columns([1, 1, 1])
     with mid:
         if st.button(
@@ -805,8 +806,14 @@ with st.expander("Advanced stage 3 options"):
 
 with st.expander("Tweakreg and skymatch"):
     new_config["external_reference"] = st.text_input(
-        "External reference catalog (CSV with RA,DEC, or 'GAIADR3')",
+        "External reference catalog",
         value=_get(current, "external_reference", ""),
+        help=(
+            "Either a path to a CSV with RA,DEC columns, or a catalog name "
+            "the jwst pipeline knows about (e.g. GAIADR3). Type the name "
+            "plain, without quotes."
+        ),
+        placeholder="GAIADR3   or   /path/to/refcat.csv",
     )
     col_t1, col_t2 = st.columns(2)
     with col_t1:

@@ -86,7 +86,7 @@ def _banner_html() -> str:
             inset: 0;
             background-image: url('{bg}');
             background-size: cover;
-            background-position: center 65%;
+            background-position: center 75%;
         "></div>
         <div style="
             position: absolute;
@@ -96,7 +96,7 @@ def _banner_html() -> str:
             position: absolute;
             top: 62px;
             left: 36px;
-            right: 140px;
+            right: 200px;
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
@@ -291,46 +291,117 @@ data_source_mode = st.radio(
 )
 
 
-def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: str = "", height: int = 620):
-    """Render an Aladin Lite viewer centered on (ra, dec) with a circle for the radius."""
+def _render_aladin(
+    ra_deg: float,
+    dec_deg: float,
+    radius_arcsec: float,
+    label: str = "",
+    height: int = 620,
+    session_key: str = "aladin",
+):
+    """Render an Aladin Lite viewer centered on (ra, dec) with a circle for the radius.
+
+    Shows a 'Loading sky view...' overlay until Aladin finishes initializing,
+    and an error message if loading the script or initializing the viewer
+    fails (or takes more than ~15 seconds). A 'Reload sky view' button
+    below the viewer lets the user retry by forcing a fresh render.
+    """
+    retry_token = st.session_state.get(f"{session_key}_retry", 0)
     fov_deg = max(min(4 * radius_arcsec / 3600.0, 5.0), 0.05)
     safe_label = label.replace("'", "").replace('"', "")
     inner_height = max(height - 20, 200)
     html = f"""<!doctype html>
-<html>
+<html data-retry-token="{retry_token}">
 <head>
   <meta charset="utf-8" />
   <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"></script>
   <style>
-    html, body {{ margin: 0; padding: 0; background: #000; }}
+    html, body {{ margin: 0; padding: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }}
     #aladin-lite-div {{ width: 100%; height: {inner_height}px; }}
+    #aladin-status {{
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      background: rgba(0,0,0,0.85);
+      z-index: 10;
+      text-align: center;
+      padding: 20px;
+      font-size: 0.95rem;
+    }}
+    #aladin-status.error {{ background: rgba(70,15,15,0.92); color: #ffd9d9; }}
+    .spinner {{
+      width: 32px; height: 32px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: #6ec3ff;
+      animation: spin 0.9s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
   </style>
 </head>
 <body>
   <div id="aladin-lite-div"></div>
+  <div id="aladin-status">
+    <div class="spinner"></div>
+    <div id="aladin-status-text">Loading sky view…</div>
+  </div>
   <script>
-    A.init.then(() => {{
-      const aladin = A.aladin('#aladin-lite-div', {{
-        target: '{ra_deg} {dec_deg}',
-        fov: {fov_deg},
-        survey: 'P/PanSTARRS/DR1/color-z-zg-g',
-        showLayersControl: true,
-        showGotoControl: true,
-        showZoomControl: true,
-        showFullscreenControl: true,
-        showCooGrid: false
+    const statusEl = document.getElementById('aladin-status');
+    const statusText = document.getElementById('aladin-status-text');
+    const showError = (msg) => {{
+      statusEl.classList.add('error');
+      statusEl.innerHTML = '<div>⚠️ ' + msg + '</div><div style="font-size:0.85rem;opacity:0.8;">Click \\'Reload sky view\\' below to retry.</div>';
+    }};
+    const loadTimeout = setTimeout(() => {{
+      if (statusEl && statusEl.style.display !== 'none') {{
+        showError('Sky view took too long to load.');
+      }}
+    }}, 15000);
+
+    if (typeof A === 'undefined') {{
+      clearTimeout(loadTimeout);
+      showError('Could not reach the Aladin Lite CDN.');
+    }} else {{
+      A.init.then(() => {{
+        try {{
+          const aladin = A.aladin('#aladin-lite-div', {{
+            target: '{ra_deg} {dec_deg}',
+            fov: {fov_deg},
+            survey: 'P/PanSTARRS/DR1/color-z-zg-g',
+            showLayersControl: true,
+            showGotoControl: true,
+            showZoomControl: true,
+            showFullscreenControl: true,
+            showCooGrid: false
+          }});
+          const overlay = A.graphicOverlay({{color: 'cyan', lineWidth: 2}});
+          aladin.addOverlay(overlay);
+          overlay.add(A.circle({ra_deg}, {dec_deg}, {radius_arcsec / 3600.0}));
+          const cat = A.catalog({{name: 'Search center', sourceSize: 36, color: 'lime'}});
+          aladin.addCatalog(cat);
+          cat.addSources([A.source({ra_deg}, {dec_deg}, {{name: '{safe_label}'}})]);
+          clearTimeout(loadTimeout);
+          statusEl.style.display = 'none';
+        }} catch (err) {{
+          clearTimeout(loadTimeout);
+          showError('Aladin initialization failed: ' + err.message);
+        }}
+      }}).catch(err => {{
+        clearTimeout(loadTimeout);
+        showError('Aladin initialization failed: ' + (err && err.message ? err.message : err));
       }});
-      const overlay = A.graphicOverlay({{color: 'cyan', lineWidth: 2}});
-      aladin.addOverlay(overlay);
-      overlay.add(A.circle({ra_deg}, {dec_deg}, {radius_arcsec / 3600.0}));
-      const cat = A.catalog({{name: 'Search center', sourceSize: 36, color: 'lime'}});
-      aladin.addCatalog(cat);
-      cat.addSources([A.source({ra_deg}, {dec_deg}, {{name: '{safe_label}'}})]);
-    }});
+    }}
   </script>
 </body>
 </html>"""
     st.iframe(html, height=height)
+
+    if st.button("↻ Reload sky view", key=f"{session_key}_reload", help="Force the viewer to re-fetch and re-initialize."):
+        st.session_state[f"{session_key}_retry"] = retry_token + 1
+        st.rerun()
 
 
 def _show_search_results(observations, products, download_dir: str, session_key: str):
@@ -464,6 +535,7 @@ if data_source_mode == "MAST lookup by target name":
                     st.session_state.get("mast_target_radius", float(target_radius)),
                     label=st.session_state.get("mast_target_name", ""),
                     height=640,
+                    session_key="aladin_target",
                 )
 
     new_config["data_directory"] = st.session_state.get("resolved_data_directory", target_dest)
@@ -539,6 +611,7 @@ elif data_source_mode == "MAST lookup by RA / Dec":
             float(coord_radius),
             label=f"RA={ra_deg:.4f}, Dec={dec_deg:.4f}",
             height=640,
+            session_key="aladin_coord",
         )
 
     new_config["data_directory"] = st.session_state.get("resolved_data_directory", coord_dest)

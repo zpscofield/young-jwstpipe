@@ -36,7 +36,7 @@ with open("config.yaml", "r") as config_file:
 
 # CRDS env
 if "crds_path" in config:
-    os.environ["CRDS_PATH"] = str(config["crds_path"])
+    os.environ["CRDS_PATH"] = os.path.expanduser(str(config["crds_path"]))
 if "crds_server_url" in config:
     os.environ["CRDS_SERVER_URL"] = str(config["crds_server_url"])
 

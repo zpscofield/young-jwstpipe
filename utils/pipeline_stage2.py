@@ -14,7 +14,7 @@ from log_utils import archive_existing_log
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
-os.environ['CRDS_PATH'] = config['crds_path']
+os.environ['CRDS_PATH'] = os.path.expanduser(str(config['crds_path']))
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
 def setup_logger(output_dir):

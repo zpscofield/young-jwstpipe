@@ -149,9 +149,32 @@ def load_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
+PATH_FIELDS = (
+    "crds_path",
+    "data_directory",
+    "output_directory",
+    "wisp_directory",
+    "pipeline_directory",
+)
+
+
+def _expand_path_str(value):
+    """Expand a leading ~ in a string. Leave non-strings and empty values alone."""
+    if isinstance(value, str) and value:
+        return str(Path(value).expanduser())
+    return value
+
+
 def save_config(config: dict) -> None:
+    # Expand ~ in known path fields so the on-disk config has concrete paths.
+    # If we did not do this, '~/crds_cache' would be passed through to the
+    # pipeline scripts and CRDS would create a literal directory called '~'.
+    expanded = dict(config)
+    for field in PATH_FIELDS:
+        if field in expanded:
+            expanded[field] = _expand_path_str(expanded[field])
     with open(CONFIG_PATH, "w") as f:
-        yaml.safe_dump(config, f, sort_keys=False, default_flow_style=False)
+        yaml.safe_dump(expanded, f, sort_keys=False, default_flow_style=False)
 
 
 def validate_config(config: dict) -> tuple[list[str], list[str]]:
@@ -900,12 +923,14 @@ with left:
         st.success(f"Saved {CONFIG_PATH}")
 with middle:
     run_clicked = st.button("Save & Run pipeline ▶", type="primary", disabled=bool(errors))
-    if run_clicked:
-        save_config(new_config)
-        st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
-        run_pipeline_streaming()
 with right:
     st.caption(
         "Save & Run writes config.yaml, then runs young_pipeline.sh and streams "
-        "its output above. Per-stage detail still lands in <output>/<obs>/logs/."
+        "its output below. Per-stage detail still lands in <output>/<obs>/logs/."
     )
+
+# Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
+if run_clicked:
+    save_config(new_config)
+    st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
+    run_pipeline_streaming()

@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
@@ -173,6 +174,48 @@ data_source_mode = st.radio(
 )
 
 
+def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: str = ""):
+    """Render an Aladin Lite viewer centered on (ra, dec) with a circle for the radius."""
+    # Field of view roughly 4x the search radius, with sensible bounds.
+    fov_deg = max(min(4 * radius_arcsec / 3600.0, 5.0), 0.05)
+    safe_label = label.replace("'", "").replace('"', "")
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"></script>
+  <style>
+    html, body {{ margin: 0; padding: 0; background: #000; }}
+    #aladin-lite-div {{ width: 100%; height: 420px; }}
+  </style>
+</head>
+<body>
+  <div id="aladin-lite-div"></div>
+  <script>
+    A.init.then(() => {{
+      const aladin = A.aladin('#aladin-lite-div', {{
+        target: '{ra_deg} {dec_deg}',
+        fov: {fov_deg},
+        survey: 'P/DSS2/color',
+        showLayersControl: true,
+        showGotoControl: true,
+        showZoomControl: true,
+        showFullscreenControl: true,
+        showCooGrid: false
+      }});
+      const overlay = A.graphicOverlay({{color: 'cyan', lineWidth: 2}});
+      aladin.addOverlay(overlay);
+      overlay.add(A.circle({ra_deg}, {dec_deg}, {radius_arcsec / 3600.0}));
+      const cat = A.catalog({{name: 'Search center', sourceSize: 18, color: 'magenta'}});
+      aladin.addCatalog(cat);
+      cat.addSources([A.source({ra_deg}, {dec_deg}, {{name: '{safe_label}'}})]);
+    }});
+  </script>
+</body>
+</html>"""
+    components.html(html, height=440)
+
+
 def _show_search_results(observations, download_dir: str, session_key: str):
     """Display a summary table with selectable rows and a Download button."""
     summary_rows = summarize(observations)
@@ -251,17 +294,34 @@ if data_source_mode == "MAST lookup by target name":
         )
 
     if st.button("Search MAST", key="search_target"):
-        if not target_name.strip():
+        clean = target_name.strip()
+        if not clean:
             st.error("Enter a target name first.")
         else:
-            with st.spinner(f"Searching MAST for '{target_name}'…"):
+            with st.spinner(f"Searching MAST for '{clean}'…"):
                 try:
                     st.session_state["mast_obs_target"] = search_by_target(
-                        target_name.strip(), radius_arcsec=float(target_radius)
+                        clean, radius_arcsec=float(target_radius)
                     )
+                    st.session_state["mast_target_name"] = clean
+                    st.session_state["mast_target_radius"] = float(target_radius)
+                    coords = resolve_target(clean)
+                    if coords is not None:
+                        st.session_state["mast_target_coords"] = coords
+                    else:
+                        st.session_state.pop("mast_target_coords", None)
                 except Exception as exc:
                     st.session_state.pop("mast_obs_target", None)
                     st.error(f"MAST search failed: {exc}")
+
+    if "mast_target_coords" in st.session_state:
+        ra, dec = st.session_state["mast_target_coords"]
+        _render_aladin(
+            ra,
+            dec,
+            st.session_state.get("mast_target_radius", float(target_radius)),
+            label=st.session_state.get("mast_target_name", ""),
+        )
 
     if "mast_obs_target" in st.session_state:
         downloaded_path = _show_search_results(
@@ -309,6 +369,8 @@ elif data_source_mode == "MAST lookup by RA / Dec":
             value=_get(current, "data_directory", "./data"),
             key="coord_dest",
         )
+
+    _render_aladin(ra_deg, dec_deg, float(coord_radius), label=f"RA={ra_deg:.4f}, Dec={dec_deg:.4f}")
 
     if st.button("Search MAST", key="search_coord"):
         with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):

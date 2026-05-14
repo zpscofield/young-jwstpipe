@@ -600,7 +600,7 @@ new_config["wisp_directory"] = st.text_input(
     value=_get(current, "wisp_directory", ""),
 )
 st.caption(
-    "Download v3 templates from "
+    "Download templates from "
     "[stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne) "
     "and point the path above at the unzipped folder."
 )

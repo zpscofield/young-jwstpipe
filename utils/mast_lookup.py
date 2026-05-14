@@ -206,6 +206,35 @@ def filter_by_summary_rows(observations, selected_summary_rows):
     return observations[keep]
 
 
+def filter_products_by_summary_rows(observations, products, selected_summary_rows):
+    """Filter a products table to only those whose parent observation matches.
+
+    Joins products back to observations via parent_obsid/obsID. Returns the
+    subset of products belonging to (program, filters) pairs in the selected
+    summary rows. If no rows are selected, returns the full products table.
+    """
+    if not selected_summary_rows:
+        return products
+
+    # Build obs_id -> (program, filters) from the observations table.
+    obs_meta = {}
+    for obs_row in observations:
+        obs_id = _norm(_row_value(obs_row, "obsid", "obs_id", "obsID", "observationid"))
+        program = _norm(_row_value(obs_row, "proposal_id", "proposalid", "proposal")) or "unknown"
+        filters = _norm(_row_value(obs_row, "filters", "filter")) or "unknown filter"
+        if obs_id:
+            obs_meta[obs_id] = (program, filters)
+
+    keys = {(row["program"], row["filters"]) for row in selected_summary_rows}
+    keep = []
+    for i, prod_row in enumerate(products):
+        obs_id = _norm(_row_value(prod_row, "parent_obsid", "obsID", "obsid", "obs_id"))
+        meta = obs_meta.get(obs_id)
+        if meta is not None and meta in keys:
+            keep.append(i)
+    return products[keep]
+
+
 def resolve_target(target_name: str) -> tuple[float, float] | None:
     """Resolve a target name to (RA, Dec) in degrees. Returns None on failure."""
     try:
@@ -216,22 +245,49 @@ def resolve_target(target_name: str) -> tuple[float, float] | None:
         return None
 
 
-def summarize(observations) -> list[dict]:
+def summarize(observations, uncal_products=None) -> list[dict]:
     """Group rows by program and filter for human-readable display.
 
     Returns a list of dicts:
         {program, target, filters, n_frames}
     sorted by program then target.
+
+    If uncal_products is provided (from mast_download.get_uncal_products),
+    n_frames counts the actual UNCAL files that would be downloaded for
+    each (program, filters) pair. Without it, n_frames counts MAST
+    observations, which usually understates the file count because each
+    observation contains many exposures.
     """
     counts = defaultdict(lambda: defaultdict(int))
     targets = defaultdict(set)
 
-    for row in observations:
-        program = _norm(_row_value(row, "proposal_id", "proposalid", "proposal")) or "unknown"
-        target = _norm(_row_value(row, "target_name", "target")) or "unknown"
-        filter_value = _norm(_row_value(row, "filters", "filter")) or "unknown filter"
-        counts[program][filter_value] += 1
-        targets[program].add(target)
+    if uncal_products is not None:
+        # Build obs_id -> (program, filters, target) from the observations.
+        obs_meta = {}
+        for row in observations:
+            obs_id = _norm(_row_value(row, "obsid", "obs_id", "obsID", "observationid"))
+            program = _norm(_row_value(row, "proposal_id", "proposalid", "proposal")) or "unknown"
+            target = _norm(_row_value(row, "target_name", "target")) or "unknown"
+            filter_value = _norm(_row_value(row, "filters", "filter")) or "unknown filter"
+            if obs_id:
+                obs_meta[obs_id] = (program, filter_value, target)
+
+        # Count uncal products, joining each back to its observation.
+        for prod_row in uncal_products:
+            obs_id = _norm(_row_value(prod_row, "parent_obsid", "obsID", "obsid", "obs_id"))
+            meta = obs_meta.get(obs_id)
+            if meta is None:
+                continue
+            program, filter_value, target = meta
+            counts[program][filter_value] += 1
+            targets[program].add(target)
+    else:
+        for row in observations:
+            program = _norm(_row_value(row, "proposal_id", "proposalid", "proposal")) or "unknown"
+            target = _norm(_row_value(row, "target_name", "target")) or "unknown"
+            filter_value = _norm(_row_value(row, "filters", "filter")) or "unknown filter"
+            counts[program][filter_value] += 1
+            targets[program].add(target)
 
     rows = []
     for program in sorted(counts):

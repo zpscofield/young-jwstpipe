@@ -29,7 +29,6 @@ import sys
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
@@ -38,10 +37,10 @@ from mast_lookup import (
     search_by_coordinates,
     search_by_proposal,
     summarize,
-    filter_by_summary_rows,
+    filter_products_by_summary_rows,
     resolve_target,
 )
-from mast_download import download_uncal
+from mast_download import get_uncal_products, download_uncal_products
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -77,7 +76,7 @@ def _banner_html() -> str:
         margin-left: -50vw;
         margin-right: -50vw;
         margin-top: -4rem;
-        margin-bottom: 1.5rem;
+        margin-bottom: -1.5rem;
         height: 460px;
         overflow: hidden;
         box-shadow: 0 4px 12px rgba(0,0,0,0.18);
@@ -87,21 +86,17 @@ def _banner_html() -> str:
             inset: 0;
             background-image: url('{bg}');
             background-size: cover;
-            background-position: center 55%;
+            background-position: center 65%;
         "></div>
         <div style="
             position: absolute;
             inset: 0;
-            background: linear-gradient(to bottom,
-                rgba(0,0,0,0.40) 0%,
-                rgba(0,0,0,0.20) 35%,
-                transparent 70%);
         "></div>
         <div style="
             position: absolute;
-            top: 92px;
+            top: 62px;
             left: 36px;
-            right: 90px;
+            right: 140px;
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
@@ -122,7 +117,7 @@ def _banner_html() -> str:
                 gap: 22px;
                 align-items: center;
                 flex-shrink: 0;
-                margin-top: -40px;
+                margin-top: -10px;
             ">
                 <img src="{young_logo}"  style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="YOUNG">
                 <img src="{yonsei_logo}" style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">
@@ -269,13 +264,17 @@ st.markdown(
 )
 
 st.markdown(_banner_html(), unsafe_allow_html=True)
-st.caption(f"Editing {CONFIG_PATH}")
 
 current = load_config()
 new_config = dict(current)
 
 
-st.divider()
+# st.divider()
+# st.caption(f"Editing {CONFIG_PATH}")
+st.markdown(
+    f'<p style="text-align: right; font-size: 0.8rem; color: gray;">Editing {CONFIG_PATH}</p>',
+    unsafe_allow_html=True,
+)
 
 
 # 1. Data source
@@ -314,7 +313,7 @@ def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: s
       const aladin = A.aladin('#aladin-lite-div', {{
         target: '{ra_deg} {dec_deg}',
         fov: {fov_deg},
-        survey: 'P/DSS2/color',
+        survey: 'P/PanSTARRS/DR1/color-z-zg-g',
         showLayersControl: true,
         showGotoControl: true,
         showZoomControl: true,
@@ -324,30 +323,36 @@ def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: s
       const overlay = A.graphicOverlay({{color: 'cyan', lineWidth: 2}});
       aladin.addOverlay(overlay);
       overlay.add(A.circle({ra_deg}, {dec_deg}, {radius_arcsec / 3600.0}));
-      const cat = A.catalog({{name: 'Search center', sourceSize: 18, color: 'magenta'}});
+      const cat = A.catalog({{name: 'Search center', sourceSize: 36, color: 'lime'}});
       aladin.addCatalog(cat);
       cat.addSources([A.source({ra_deg}, {dec_deg}, {{name: '{safe_label}'}})]);
     }});
   </script>
 </body>
 </html>"""
-    components.html(html, height=height)
+    st.iframe(html, height=height)
 
 
-def _show_search_results(observations, download_dir: str, session_key: str):
-    """Display a summary table with selectable rows and a Download button."""
-    summary_rows = summarize(observations)
+def _show_search_results(observations, products, download_dir: str, session_key: str):
+    """Display a summary table with selectable rows and a Download button.
+
+    products is the pre-fetched UNCAL products table (from
+    get_uncal_products). It's used for accurate file counts and as the
+    source for downloading.
+    """
+    summary_rows = summarize(observations, uncal_products=products)
     total_frames = sum(row["n_frames"] for row in summary_rows)
     st.markdown(
         f"**Found {len(observations)} observations in "
-        f"{len({row['program'] for row in summary_rows})} programs ({total_frames} frames).**"
+        f"{len({row['program'] for row in summary_rows})} programs ({total_frames} uncal files).**"
     )
     st.caption("Tick rows to download just those program/filter combinations. Leave nothing ticked to download everything.")
 
     event = st.dataframe(
         summary_rows,
         hide_index=True,
-        use_container_width=True,
+        # use_container_width=True,
+        width='stretch',
         on_select="rerun",
         selection_mode="multi-row",
         key=f"select_{session_key}",
@@ -356,12 +361,12 @@ def _show_search_results(observations, download_dir: str, session_key: str):
 
     if selected_indices:
         selected_rows = [summary_rows[i] for i in selected_indices]
-        to_download = filter_by_summary_rows(observations, selected_rows)
+        to_download = filter_products_by_summary_rows(observations, products, selected_rows)
         selected_frames = sum(summary_rows[i]["n_frames"] for i in selected_indices)
-        button_label = f"Download {selected_frames} selected frames"
+        button_label = f"Download {selected_frames} selected files"
     else:
-        to_download = observations
-        button_label = f"Download all {total_frames} frames"
+        to_download = products
+        button_label = f"Download all {total_frames} files"
 
     if st.button(button_label, key=f"download_{session_key}", type="primary"):
         progress_bar = st.progress(0.0, text="Starting…")
@@ -373,7 +378,7 @@ def _show_search_results(observations, download_dir: str, session_key: str):
                 status_text.warning(f"Failed: {filename}")
 
         try:
-            result = download_uncal(to_download, download_dir, progress=on_progress)
+            result = download_uncal_products(to_download, download_dir, progress=on_progress)
         except Exception as exc:
             st.error(f"Download failed: {exc}")
             return None
@@ -416,21 +421,24 @@ if data_source_mode == "MAST lookup by target name":
         if not clean:
             st.error("Enter a target name first.")
         else:
-            with st.spinner(f"Searching MAST for '{clean}'…"):
-                try:
-                    st.session_state["mast_obs_target"] = search_by_target(
-                        clean, radius_arcsec=float(target_radius)
-                    )
-                    st.session_state["mast_target_name"] = clean
-                    st.session_state["mast_target_radius"] = float(target_radius)
-                    coords = resolve_target(clean)
-                    if coords is not None:
-                        st.session_state["mast_target_coords"] = coords
-                    else:
-                        st.session_state.pop("mast_target_coords", None)
-                except Exception as exc:
-                    st.session_state.pop("mast_obs_target", None)
-                    st.error(f"MAST search failed: {exc}")
+            try:
+                with st.spinner(f"Searching MAST for '{clean}'…"):
+                    obs = search_by_target(clean, radius_arcsec=float(target_radius))
+                with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                    products = get_uncal_products(obs)
+                st.session_state["mast_obs_target"] = obs
+                st.session_state["mast_products_target"] = products
+                st.session_state["mast_target_name"] = clean
+                st.session_state["mast_target_radius"] = float(target_radius)
+                coords = resolve_target(clean)
+                if coords is not None:
+                    st.session_state["mast_target_coords"] = coords
+                else:
+                    st.session_state.pop("mast_target_coords", None)
+            except Exception as exc:
+                st.session_state.pop("mast_obs_target", None)
+                st.session_state.pop("mast_products_target", None)
+                st.error(f"MAST search failed: {exc}")
 
     has_results = "mast_obs_target" in st.session_state
     has_coords = "mast_target_coords" in st.session_state
@@ -440,7 +448,10 @@ if data_source_mode == "MAST lookup by target name":
         with col_table:
             if has_results:
                 downloaded_path = _show_search_results(
-                    st.session_state["mast_obs_target"], target_dest, "target"
+                    st.session_state["mast_obs_target"],
+                    st.session_state["mast_products_target"],
+                    target_dest,
+                    "target",
                 )
                 if downloaded_path:
                     st.session_state["resolved_data_directory"] = downloaded_path
@@ -496,20 +507,26 @@ elif data_source_mode == "MAST lookup by RA / Dec":
         )
 
     if st.button("Search MAST", key="search_coord"):
-        with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):
-            try:
-                st.session_state["mast_obs_coord"] = search_by_coordinates(
-                    ra_deg, dec_deg, radius_arcsec=float(coord_radius)
-                )
-            except Exception as exc:
-                st.session_state.pop("mast_obs_coord", None)
-                st.error(f"MAST search failed: {exc}")
+        try:
+            with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):
+                obs = search_by_coordinates(ra_deg, dec_deg, radius_arcsec=float(coord_radius))
+            with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                products = get_uncal_products(obs)
+            st.session_state["mast_obs_coord"] = obs
+            st.session_state["mast_products_coord"] = products
+        except Exception as exc:
+            st.session_state.pop("mast_obs_coord", None)
+            st.session_state.pop("mast_products_coord", None)
+            st.error(f"MAST search failed: {exc}")
 
     col_table, col_view = st.columns([1, 1])
     with col_table:
         if "mast_obs_coord" in st.session_state:
             downloaded_path = _show_search_results(
-                st.session_state["mast_obs_coord"], coord_dest, "coord"
+                st.session_state["mast_obs_coord"],
+                st.session_state["mast_products_coord"],
+                coord_dest,
+                "coord",
             )
             if downloaded_path:
                 st.session_state["resolved_data_directory"] = downloaded_path
@@ -545,16 +562,24 @@ elif data_source_mode == "MAST lookup by program ID":
         if not proposal_input.strip():
             st.error("Enter at least one program ID first.")
         else:
-            with st.spinner(f"Searching MAST for proposal(s) {proposal_input}…"):
-                try:
-                    st.session_state["mast_obs_proposal"] = search_by_proposal(proposal_input.strip())
-                except Exception as exc:
-                    st.session_state.pop("mast_obs_proposal", None)
-                    st.error(f"MAST search failed: {exc}")
+            try:
+                with st.spinner(f"Searching MAST for proposal(s) {proposal_input}…"):
+                    obs = search_by_proposal(proposal_input.strip())
+                with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                    products = get_uncal_products(obs)
+                st.session_state["mast_obs_proposal"] = obs
+                st.session_state["mast_products_proposal"] = products
+            except Exception as exc:
+                st.session_state.pop("mast_obs_proposal", None)
+                st.session_state.pop("mast_products_proposal", None)
+                st.error(f"MAST search failed: {exc}")
 
     if "mast_obs_proposal" in st.session_state:
         downloaded_path = _show_search_results(
-            st.session_state["mast_obs_proposal"], prop_dest, "proposal"
+            st.session_state["mast_obs_proposal"],
+            st.session_state["mast_products_proposal"],
+            prop_dest,
+            "proposal",
         )
         if downloaded_path:
             st.session_state["resolved_data_directory"] = downloaded_path

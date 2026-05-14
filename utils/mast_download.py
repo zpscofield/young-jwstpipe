@@ -34,8 +34,13 @@ def _auth_headers() -> dict:
     return {"Authorization": f"token {token}"} if token else {}
 
 
-def _uncal_products(observations):
-    """Get the _uncal.fits SCIENCE products for the given observations."""
+def get_uncal_products(observations):
+    """Return the _uncal.fits SCIENCE products for the given observations.
+
+    Use this once per search; the products table can be reused for both
+    counting (via mast_lookup.summarize) and downloading (via
+    download_uncal_products) without re-hitting MAST.
+    """
     Observations = _import_observations()
     products = Observations.get_product_list(observations)
     filtered = Observations.filter_products(
@@ -49,6 +54,10 @@ def _uncal_products(observations):
         if str(row["productFilename"] or "").endswith("_uncal.fits")
     ]
     return filtered[keep]
+
+
+# Backwards-compatible alias.
+_uncal_products = get_uncal_products
 
 
 def _download_one(data_uri: str, dest: Path, retries: int = 2) -> bool:
@@ -90,12 +99,12 @@ def _download_one(data_uri: str, dest: Path, retries: int = 2) -> bool:
     return False
 
 
-def download_uncal(
-    observations,
+def download_uncal_products(
+    products,
     dest_dir,
     progress: Callable[[int, int, str, str], None] | None = None,
 ) -> dict:
-    """Download all _uncal.fits files for the observations to dest_dir.
+    """Download every file in the products table to dest_dir.
 
     progress(i, total, filename, status) is called once per file with
     status in {"downloading", "cached", "failed"}.
@@ -106,7 +115,6 @@ def download_uncal(
     dest = Path(dest_dir).expanduser().resolve()
     dest.mkdir(parents=True, exist_ok=True)
 
-    products = _uncal_products(observations)
     total = len(products)
     downloaded: list[Path] = []
     failed: list[str] = []
@@ -133,3 +141,17 @@ def download_uncal(
                 progress(i, total, filename, "failed")
 
     return {"path": dest, "downloaded": downloaded, "failed": failed}
+
+
+def download_uncal(
+    observations,
+    dest_dir,
+    progress: Callable[[int, int, str, str], None] | None = None,
+) -> dict:
+    """Convenience wrapper: query products from observations, then download.
+
+    For new code, prefer get_uncal_products() + download_uncal_products()
+    so the products table can be shared with the summary step.
+    """
+    products = get_uncal_products(observations)
+    return download_uncal_products(products, dest_dir, progress=progress)

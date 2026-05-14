@@ -61,58 +61,75 @@ def _data_uri(relative_path: str, mime: str) -> str:
 def _banner_html() -> str:
     bg = _data_uri("xlssc_parallel_jpeg.jpg", "image/jpeg")
     young_logo = _data_uri("younglogowhite.png", "image/png")
-    yonsei_logo = _data_uri("transparent_기본형_심볼-03.png", "image/png")
+    yonsei_logo = _data_uri("transparent_yonsei.png", "image/png")
     jwst_logo = _data_uri("500px-JWST_decal.svg.png", "image/png")
+    # 100vw + -50vw / 50% left is the standard "full bleed" trick that
+    # breaks out of Streamlit's block-container padding so the banner spans
+    # the entire browser width on wide screens. mask-image fades the image
+    # itself to transparent at the bottom, which works in any theme
+    # (light/dark/system) because the page background shows through.
     return f"""
     <div style="
         position: relative;
-        width: 100%;
-        height: 360px;
-        background-image: url('{bg}');
-        background-size: cover;
-        background-position: center 30%;
-        border-radius: 12px;
-        overflow: hidden;
+        width: 100vw;
+        left: 50%;
+        right: 50%;
+        margin-left: -50vw;
+        margin-right: -50vw;
+        margin-top: -1rem;
         margin-bottom: 1rem;
+        height: 360px;
+        overflow: hidden;
     ">
         <div style="
             position: absolute;
             inset: 0;
-            background: linear-gradient(to bottom,
-                rgba(14,17,23,0.10) 0%,
-                rgba(14,17,23,0.20) 35%,
-                rgba(14,17,23,0.70) 75%,
-                rgba(14,17,23,1.00) 100%);
+            background-image: url('{bg}');
+            background-size: cover;
+            background-position: center 30%;
+            -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+            mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
         "></div>
         <div style="
             position: absolute;
-            bottom: 24px;
-            left: 36px;
-            color: #ffffff;
-            z-index: 2;
-            max-width: 65%;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.7);
-        ">
-            <h1 style="font-size: 2.6rem; margin: 0; font-weight: 700; line-height: 1.1;">
-                YOUNG JWST Calibration Pipeline
-            </h1>
-            <p style="font-size: 1.05rem; margin-top: 10px; opacity: 0.95;">
-                Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it — all from this page.
-            </p>
-        </div>
+            inset: 0;
+            background: linear-gradient(to bottom,
+                rgba(0,0,0,0.40) 0%,
+                rgba(0,0,0,0.20) 35%,
+                transparent 70%);
+            -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+            mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+        "></div>
         <div style="
             position: absolute;
-            top: 24px;
-            right: 28px;
+            top: 28px;
+            left: 36px;
+            right: 36px;
             display: flex;
-            flex-direction: column;
-            gap: 14px;
-            align-items: flex-end;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 24px;
             z-index: 2;
         ">
-            <img src="{young_logo}"  style="height: 60px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="YOUNG">
-            <img src="{yonsei_logo}" style="height: 38px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="Yonsei">
-            <img src="{jwst_logo}"   style="height: 62px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="JWST">
+            <div style="color: #ffffff; max-width: 60%; text-shadow: 0 2px 10px rgba(0,0,0,0.75);">
+                <h1 style="font-size: 2.5rem; margin: 0; font-weight: 700; line-height: 1.1;">
+                    YOUNG JWST Calibration Pipeline
+                </h1>
+                <p style="font-size: 1.05rem; margin-top: 10px; opacity: 0.95;">
+                    Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it — all from this page.
+                </p>
+            </div>
+            <div style="
+                display: flex;
+                flex-direction: row;
+                gap: 22px;
+                align-items: center;
+                flex-shrink: 0;
+            ">
+                <img src="{young_logo}"  style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="YOUNG">
+                <img src="{yonsei_logo}" style="height: 38px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">
+                <img src="{jwst_logo}"   style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="JWST">
+            </div>
         </div>
     </div>
     """

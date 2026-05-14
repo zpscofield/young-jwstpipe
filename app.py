@@ -24,6 +24,7 @@ commits.
 from __future__ import annotations
 
 import base64
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -273,16 +274,31 @@ def run_pipeline_streaming() -> int:
             bufsize=1,
         )
 
+        # def _render_log():
+        #     with log_placeholder.container():
+        #         components.html(
+        #             _log_panel_html(lines[-MAX_LOG_LINES:]),
+        #             height=LOG_PANEL_HEIGHT_PX + 20,
+        #         )
         def _render_log():
             with log_placeholder.container():
-                components.html(
+                st.iframe(
                     _log_panel_html(lines[-MAX_LOG_LINES:]),
                     height=LOG_PANEL_HEIGHT_PX + 20,
                 )
 
+        # Detect tqdm-style progress lines (e.g. "  3%|▎         | 1/32 [...]")
+        # so consecutive updates overwrite each other in the log instead of
+        # piling up as separate lines, the way they would in a real terminal.
+        tqdm_line = re.compile(r"^\s*\d+%\|")
+
         assert process.stdout is not None
         for line in process.stdout:
-            lines.append(line.rstrip("\n"))
+            stripped = line.rstrip("\n")
+            if lines and tqdm_line.match(stripped) and tqdm_line.match(lines[-1]):
+                lines[-1] = stripped
+            else:
+                lines.append(stripped)
             _render_log()
 
         return_code = process.wait()

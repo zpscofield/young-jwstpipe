@@ -207,17 +207,29 @@ run_pipeline() {
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
+        # Run cfnoise in two passes so every cal file ends up as *_cal_cfnoise.fits,
+        # regardless of whether wisp_subtraction produced a wisp-corrected version
+        # for it. Pass 1: files that came out of wisp (*_cal_wisp.fits). Pass 2:
+        # any *_cal.fits left behind (wisp failed for them, or wisp_subtraction
+        # was skipped entirely).
         if compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
-            echo "[Detected *_cal_wisp.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
-            suffix="_wisp"
-        else
-            echo "[Detected *_cal.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
-            suffix=""
+            echo "[Pass 1: processing *_cal_wisp.fits files]"
+            python "$PIPELINE_DIR/utils/fnoise_reduction.py" \
+                --files $OBS_DIR/stage2_output/jw*cal_wisp.fits \
+                --output_dir "$OBS_DIR/stage2_output" \
+                --suffix "_wisp" \
+                --nproc "$CF_NPROC"
         fi
 
-        python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $file_pattern --output_dir "$OBS_DIR/stage2_output" --suffix "$suffix" --nproc "$CF_NPROC"
+        if compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
+            echo "[Pass 2: processing remaining *_cal.fits files]"
+            python "$PIPELINE_DIR/utils/fnoise_reduction.py" \
+                --files $OBS_DIR/stage2_output/jw*cal.fits \
+                --output_dir "$OBS_DIR/stage2_output" \
+                --suffix "" \
+                --nproc "$CF_NPROC"
+        fi
+
         echo ""
 
     else

@@ -38,20 +38,20 @@ else
         ARCH="$(uname -m)"
         case "$OS-$ARCH" in
             Linux-x86_64)
-                URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
-                curl -fsSL -o "$CLOUDFLARED_BIN" "$URL"
+                URL_DL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+                curl -fsSL -o "$CLOUDFLARED_BIN" "$URL_DL"
                 ;;
             Linux-aarch64|Linux-arm64)
-                URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
-                curl -fsSL -o "$CLOUDFLARED_BIN" "$URL"
+                URL_DL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"
+                curl -fsSL -o "$CLOUDFLARED_BIN" "$URL_DL"
                 ;;
             Darwin-x86_64)
-                URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz"
-                curl -fsSL "$URL" | tar -xz -C "$BIN_DIR"
+                URL_DL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64.tgz"
+                curl -fsSL "$URL_DL" | tar -xz -C "$BIN_DIR"
                 ;;
             Darwin-arm64)
-                URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
-                curl -fsSL "$URL" | tar -xz -C "$BIN_DIR"
+                URL_DL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
+                curl -fsSL "$URL_DL" | tar -xz -C "$BIN_DIR"
                 ;;
             *)
                 echo "Error: no cloudflared binary available for $OS-$ARCH."
@@ -93,23 +93,63 @@ for _ in $(seq 1 60); do
     sleep 0.5
 done
 
-# 5. Start the tunnel and grab the public URL from its log.
-echo "[2/2] Opening Cloudflare Tunnel..."
-: > "$TUNNEL_LOG"
-"$CLOUDFLARED" tunnel --no-autoupdate --url "http://localhost:$PORT" \
-    > "$TUNNEL_LOG" 2>&1 &
-TUNNEL_PID=$!
-
+# 5. Open a tunnel. Cloudflare sometimes hands out a subdomain that is slow
+# to propagate through DNS or just never responds. Probe it from the
+# server side, and if it doesn't come up within ~30s, kill cloudflared and
+# try a fresh URL. Up to a few attempts before giving up.
 URL=""
-for _ in $(seq 1 60); do
-    URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
-    [ -n "$URL" ] && break
-    sleep 1
+MAX_TUNNEL_ATTEMPTS=3
+
+for attempt in $(seq 1 "$MAX_TUNNEL_ATTEMPTS"); do
+    echo "[2/2] Opening Cloudflare Tunnel (attempt $attempt of $MAX_TUNNEL_ATTEMPTS)..."
+    : > "$TUNNEL_LOG"
+    "$CLOUDFLARED" tunnel --no-autoupdate --url "http://localhost:$PORT" \
+        > "$TUNNEL_LOG" 2>&1 &
+    TUNNEL_PID=$!
+
+    # Wait for cloudflared to print a candidate URL.
+    CANDIDATE_URL=""
+    for _ in $(seq 1 60); do
+        CANDIDATE_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -1 || true)
+        [ -n "$CANDIDATE_URL" ] && break
+        sleep 1
+    done
+
+    if [ -z "$CANDIDATE_URL" ]; then
+        echo "      Cloudflared did not print a URL; retrying..."
+        kill "$TUNNEL_PID" 2>/dev/null || true
+        wait "$TUNNEL_PID" 2>/dev/null || true
+        TUNNEL_PID=""
+        continue
+    fi
+
+    echo "      Got $CANDIDATE_URL"
+    echo "      Checking that DNS has propagated and the tunnel responds..."
+
+    URL_OK=false
+    for _ in $(seq 1 15); do
+        if curl -fsS --max-time 5 "$CANDIDATE_URL" -o /dev/null 2>/dev/null; then
+            URL_OK=true
+            break
+        fi
+        sleep 2
+    done
+
+    if $URL_OK; then
+        URL="$CANDIDATE_URL"
+        break
+    fi
+
+    echo "      URL did not respond after 30s; trying a fresh one..."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+    wait "$TUNNEL_PID" 2>/dev/null || true
+    TUNNEL_PID=""
 done
 
 if [ -z "$URL" ]; then
     echo ""
-    echo "[error] Could not get a tunnel URL. Cloudflared log:"
+    echo "[error] Could not get a working tunnel URL after $MAX_TUNNEL_ATTEMPTS attempts."
+    echo "Last cloudflared log:"
     cat "$TUNNEL_LOG"
     exit 1
 fi

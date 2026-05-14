@@ -76,10 +76,11 @@ def _banner_html() -> str:
         right: 50%;
         margin-left: -50vw;
         margin-right: -50vw;
-        margin-top: -1rem;
-        margin-bottom: 1rem;
+        margin-top: 0;
+        margin-bottom: 1.5rem;
         height: 360px;
         overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.18);
     ">
         <div style="
             position: absolute;
@@ -87,8 +88,6 @@ def _banner_html() -> str:
             background-image: url('{bg}');
             background-size: cover;
             background-position: center 30%;
-            -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
-            mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
         "></div>
         <div style="
             position: absolute;
@@ -97,21 +96,19 @@ def _banner_html() -> str:
                 rgba(0,0,0,0.40) 0%,
                 rgba(0,0,0,0.20) 35%,
                 transparent 70%);
-            -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
-            mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
         "></div>
         <div style="
             position: absolute;
             top: 28px;
             left: 36px;
-            right: 36px;
+            right: 90px;
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             gap: 24px;
             z-index: 2;
         ">
-            <div style="color: #ffffff; max-width: 60%; text-shadow: 0 2px 10px rgba(0,0,0,0.75);">
+            <div style="color: #ffffff; max-width: 55%; text-shadow: 0 2px 10px rgba(0,0,0,0.75);">
                 <h1 style="font-size: 2.5rem; margin: 0; font-weight: 700; line-height: 1.1;">
                     YOUNG JWST Calibration Pipeline
                 </h1>
@@ -127,7 +124,7 @@ def _banner_html() -> str:
                 flex-shrink: 0;
             ">
                 <img src="{young_logo}"  style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="YOUNG">
-                <img src="{yonsei_logo}" style="height: 38px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">
+                <img src="{yonsei_logo}" style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">
                 <img src="{jwst_logo}"   style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="JWST">
             </div>
         </div>
@@ -240,6 +237,21 @@ def _get(config: dict, key: str, default):
 
 st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
 
+# Make Streamlit's own toolbar transparent and float it over the banner,
+# and drop the top padding so the banner can start at the top of the page.
+st.markdown(
+    """
+    <style>
+    [data-testid="stHeader"] { background: transparent !important; }
+    .stApp > header { background: transparent !important; }
+    [data-testid="stMain"] > div.block-container,
+    section.main > div.block-container,
+    .main .block-container { padding-top: 0 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(_banner_html(), unsafe_allow_html=True)
 st.caption(f"Editing {CONFIG_PATH}")
 
@@ -251,7 +263,7 @@ st.divider()
 
 
 # 1. Data source
-st.header("🔭 1. Data source")
+st.header("1. Data source")
 data_source_mode = st.radio(
     "How do you want to provide data?",
     [
@@ -542,7 +554,7 @@ else:  # Use existing directory
 
 
 # 2. Output & grouping
-st.header("📁 2. Output & grouping")
+st.header("2. Output & grouping")
 col1, col2 = st.columns(2)
 with col1:
     new_config["output_directory"] = st.text_input(
@@ -572,7 +584,7 @@ with col2:
 
 
 # 3. Calibration steps (skip toggles)
-st.header("⚙️ 3. Calibration steps")
+st.header("3. Calibration steps")
 st.caption("Check a step to skip it. Unchecked steps run normally.")
 current_skip = set(_get(current, "skip_steps", []) or [])
 skip_cols = st.columns(2)
@@ -586,12 +598,16 @@ new_config["skip_steps"] = new_skip
 new_config["wisp_directory"] = st.text_input(
     "WISP templates directory (required for wisp_subtraction)",
     value=_get(current, "wisp_directory", ""),
-    help="Download v3 templates from https://stsci.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne",
+)
+st.caption(
+    "Download v3 templates from "
+    "[stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne) "
+    "and point the path above at the unzipped folder."
 )
 
 
 # 4. Performance
-st.header("⚡ 4. Performance (parallel workers per stage)")
+st.header("4. Performance (parallel workers per stage)")
 nproc_cols = st.columns(3)
 nproc_fields = [
     ("stage1_nproc", "Stage 1"),
@@ -721,7 +737,7 @@ with st.expander("Extract i2d extensions"):
 
 
 # 5. CRDS
-st.header("🛰️ 5. CRDS")
+st.header("5. CRDS")
 new_config["crds_path"] = st.text_input(
     "CRDS cache path",
     value=_get(current, "crds_path", "~/crds_cache"),

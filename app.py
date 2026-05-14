@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
@@ -86,7 +87,7 @@ def _banner_html() -> str:
             inset: 0;
             background-image: url('{bg}');
             background-size: cover;
-            background-position: center 75%;
+            background-position: center 70%;
         "></div>
         <div style="
             position: absolute;
@@ -310,6 +311,8 @@ def _render_aladin(
     fov_deg = max(min(4 * radius_arcsec / 3600.0, 5.0), 0.05)
     safe_label = label.replace("'", "").replace('"', "")
     inner_height = max(height - 20, 200)
+
+    st.markdown("##### Sky View")
     html = f"""<!doctype html>
 <html data-retry-token="{retry_token}">
 <head>
@@ -397,11 +400,18 @@ def _render_aladin(
   </script>
 </body>
 </html>"""
-    st.iframe(html, height=height)
+    components.html(html, height=height)
 
-    if st.button("↻ Reload sky view", key=f"{session_key}_reload", help="Force the viewer to re-fetch and re-initialize."):
-        st.session_state[f"{session_key}_retry"] = retry_token + 1
-        st.rerun()
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        if st.button(
+            "↻ Reload sky view",
+            key=f"{session_key}_reload",
+            help="Force the viewer to re-fetch and re-initialize.",
+            use_container_width=True,
+        ):
+            st.session_state[f"{session_key}_retry"] = retry_token + 1
+            st.rerun()
 
 
 def _show_search_results(observations, products, download_dir: str, session_key: str):

@@ -11,6 +11,9 @@ stage2_output/
 stage3_output/
 logs/
 
+# Downloaded uncal files end up here; never commit them
+data/
+
 # OS / editor
 .DS_Store
 .idea/
@@ -19,7 +22,3 @@ logs/
 # Streamlit state
 .streamlit/secrets.toml
 .streamlit/.*.log
-.streamlit/.lhr_known_hosts
-
-# Local cloudflared binary (kept for backwards compat; share.sh now uses localhost.run)
-bin/

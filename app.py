@@ -87,7 +87,7 @@ def _banner_html() -> str:
             inset: 0;
             background-image: url('{bg}');
             background-size: cover;
-            background-position: center 35%;
+            background-position: center 55%;
         "></div>
         <div style="
             position: absolute;
@@ -122,6 +122,7 @@ def _banner_html() -> str:
                 gap: 22px;
                 align-items: center;
                 flex-shrink: 0;
+                margin-top: -40px;
             ">
                 <img src="{young_logo}"  style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="YOUNG">
                 <img src="{yonsei_logo}" style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">

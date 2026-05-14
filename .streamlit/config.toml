@@ -6,3 +6,7 @@ port = 8501
 [browser]
 # Don't phone home with usage stats.
 gatherUsageStats = false
+
+[theme]
+# Dark theme so the header banner can fade to the page background seamlessly.
+base = "dark"

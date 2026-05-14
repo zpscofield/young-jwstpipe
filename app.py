@@ -23,6 +23,7 @@ commits.
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import sys
 from pathlib import Path
@@ -46,7 +47,75 @@ from mast_download import download_uncal
 REPO_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
 PIPELINE_SCRIPT = REPO_ROOT / "young_pipeline.sh"
+RESOURCES = REPO_ROOT / "resources"
 MAX_LOG_LINES = 500
+
+
+@st.cache_data
+def _data_uri(relative_path: str, mime: str) -> str:
+    data = (RESOURCES / relative_path).read_bytes()
+    return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+
+
+@st.cache_data
+def _banner_html() -> str:
+    bg = _data_uri("xlssc_parallel_jpeg.jpg", "image/jpeg")
+    young_logo = _data_uri("younglogowhite.png", "image/png")
+    yonsei_logo = _data_uri("transparent_기본형_심볼-03.png", "image/png")
+    jwst_logo = _data_uri("500px-JWST_decal.svg.png", "image/png")
+    return f"""
+    <div style="
+        position: relative;
+        width: 100%;
+        height: 360px;
+        background-image: url('{bg}');
+        background-size: cover;
+        background-position: center 30%;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 1rem;
+    ">
+        <div style="
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to bottom,
+                rgba(14,17,23,0.10) 0%,
+                rgba(14,17,23,0.20) 35%,
+                rgba(14,17,23,0.70) 75%,
+                rgba(14,17,23,1.00) 100%);
+        "></div>
+        <div style="
+            position: absolute;
+            bottom: 24px;
+            left: 36px;
+            color: #ffffff;
+            z-index: 2;
+            max-width: 65%;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+        ">
+            <h1 style="font-size: 2.6rem; margin: 0; font-weight: 700; line-height: 1.1;">
+                YOUNG JWST Calibration Pipeline
+            </h1>
+            <p style="font-size: 1.05rem; margin-top: 10px; opacity: 0.95;">
+                Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it — all from this page.
+            </p>
+        </div>
+        <div style="
+            position: absolute;
+            top: 24px;
+            right: 28px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            align-items: flex-end;
+            z-index: 2;
+        ">
+            <img src="{young_logo}"  style="height: 60px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="YOUNG">
+            <img src="{yonsei_logo}" style="height: 38px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="Yonsei">
+            <img src="{jwst_logo}"   style="height: 62px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));" alt="JWST">
+        </div>
+    </div>
+    """
 
 PIPELINE_STEPS = [
     "download_uncal_references",
@@ -154,21 +223,8 @@ def _get(config: dict, key: str, default):
 
 st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
 
-# Header banner.
-banner_col1, banner_col2 = st.columns([1, 2])
-with banner_col1:
-    st.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Webb%27s_First_Deep_Field_%28adjusted%29.jpg/640px-Webb%27s_First_Deep_Field_%28adjusted%29.jpg",
-        use_container_width=True,
-        caption="SMACS 0723, JWST first deep field (NASA/STScI, public domain)",
-    )
-with banner_col2:
-    st.title("YOUNG JWST Calibration Pipeline")
-    st.markdown(
-        "Search MAST for JWST NIRCam data, configure the calibration pipeline, "
-        "and run it — all from this page."
-    )
-    st.caption(f"Editing {CONFIG_PATH}")
+st.markdown(_banner_html(), unsafe_allow_html=True)
+st.caption(f"Editing {CONFIG_PATH}")
 
 current = load_config()
 new_config = dict(current)
@@ -191,11 +247,11 @@ data_source_mode = st.radio(
 )
 
 
-def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: str = ""):
+def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: str = "", height: int = 620):
     """Render an Aladin Lite viewer centered on (ra, dec) with a circle for the radius."""
-    # Field of view roughly 4x the search radius, with sensible bounds.
     fov_deg = max(min(4 * radius_arcsec / 3600.0, 5.0), 0.05)
     safe_label = label.replace("'", "").replace('"', "")
+    inner_height = max(height - 20, 200)
     html = f"""<!doctype html>
 <html>
 <head>
@@ -203,7 +259,7 @@ def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: s
   <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"></script>
   <style>
     html, body {{ margin: 0; padding: 0; background: #000; }}
-    #aladin-lite-div {{ width: 100%; height: 420px; }}
+    #aladin-lite-div {{ width: 100%; height: {inner_height}px; }}
   </style>
 </head>
 <body>
@@ -230,7 +286,7 @@ def _render_aladin(ra_deg: float, dec_deg: float, radius_arcsec: float, label: s
   </script>
 </body>
 </html>"""
-    components.html(html, height=440)
+    components.html(html, height=height)
 
 
 def _show_search_results(observations, download_dir: str, session_key: str):
@@ -331,21 +387,28 @@ if data_source_mode == "MAST lookup by target name":
                     st.session_state.pop("mast_obs_target", None)
                     st.error(f"MAST search failed: {exc}")
 
-    if "mast_target_coords" in st.session_state:
-        ra, dec = st.session_state["mast_target_coords"]
-        _render_aladin(
-            ra,
-            dec,
-            st.session_state.get("mast_target_radius", float(target_radius)),
-            label=st.session_state.get("mast_target_name", ""),
-        )
+    has_results = "mast_obs_target" in st.session_state
+    has_coords = "mast_target_coords" in st.session_state
 
-    if "mast_obs_target" in st.session_state:
-        downloaded_path = _show_search_results(
-            st.session_state["mast_obs_target"], target_dest, "target"
-        )
-        if downloaded_path:
-            st.session_state["resolved_data_directory"] = downloaded_path
+    if has_results or has_coords:
+        col_table, col_view = st.columns([1, 1])
+        with col_table:
+            if has_results:
+                downloaded_path = _show_search_results(
+                    st.session_state["mast_obs_target"], target_dest, "target"
+                )
+                if downloaded_path:
+                    st.session_state["resolved_data_directory"] = downloaded_path
+        with col_view:
+            if has_coords:
+                ra, dec = st.session_state["mast_target_coords"]
+                _render_aladin(
+                    ra,
+                    dec,
+                    st.session_state.get("mast_target_radius", float(target_radius)),
+                    label=st.session_state.get("mast_target_name", ""),
+                    height=640,
+                )
 
     new_config["data_directory"] = st.session_state.get("resolved_data_directory", target_dest)
 
@@ -387,8 +450,6 @@ elif data_source_mode == "MAST lookup by RA / Dec":
             key="coord_dest",
         )
 
-    _render_aladin(ra_deg, dec_deg, float(coord_radius), label=f"RA={ra_deg:.4f}, Dec={dec_deg:.4f}")
-
     if st.button("Search MAST", key="search_coord"):
         with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):
             try:
@@ -399,12 +460,24 @@ elif data_source_mode == "MAST lookup by RA / Dec":
                 st.session_state.pop("mast_obs_coord", None)
                 st.error(f"MAST search failed: {exc}")
 
-    if "mast_obs_coord" in st.session_state:
-        downloaded_path = _show_search_results(
-            st.session_state["mast_obs_coord"], coord_dest, "coord"
+    col_table, col_view = st.columns([1, 1])
+    with col_table:
+        if "mast_obs_coord" in st.session_state:
+            downloaded_path = _show_search_results(
+                st.session_state["mast_obs_coord"], coord_dest, "coord"
+            )
+            if downloaded_path:
+                st.session_state["resolved_data_directory"] = downloaded_path
+        else:
+            st.info("Enter coordinates and click Search MAST to see what is available.")
+    with col_view:
+        _render_aladin(
+            ra_deg,
+            dec_deg,
+            float(coord_radius),
+            label=f"RA={ra_deg:.4f}, Dec={dec_deg:.4f}",
+            height=640,
         )
-        if downloaded_path:
-            st.session_state["resolved_data_directory"] = downloaded_path
 
     new_config["data_directory"] = st.session_state.get("resolved_data_directory", coord_dest)
 

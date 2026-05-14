@@ -76,9 +76,9 @@ def _banner_html() -> str:
         right: 50%;
         margin-left: -50vw;
         margin-right: -50vw;
-        margin-top: 0;
+        margin-top: -4rem;
         margin-bottom: 1.5rem;
-        height: 360px;
+        height: 460px;
         overflow: hidden;
         box-shadow: 0 4px 12px rgba(0,0,0,0.18);
     ">
@@ -87,7 +87,7 @@ def _banner_html() -> str:
             inset: 0;
             background-image: url('{bg}');
             background-size: cover;
-            background-position: center 30%;
+            background-position: center 35%;
         "></div>
         <div style="
             position: absolute;
@@ -99,7 +99,7 @@ def _banner_html() -> str:
         "></div>
         <div style="
             position: absolute;
-            top: 28px;
+            top: 92px;
             left: 36px;
             right: 90px;
             display: flex;
@@ -237,16 +237,31 @@ def _get(config: dict, key: str, default):
 
 st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
 
-# Make Streamlit's own toolbar transparent and float it over the banner,
-# and drop the top padding so the banner can start at the top of the page.
+# Make Streamlit's own toolbar transparent and let pointer-events pass
+# through the header bar to the banner underneath. The toolbar buttons
+# themselves stay clickable. Drop every flavor of top padding the main
+# block-container might have so the banner can start at the very top.
 st.markdown(
     """
     <style>
-    [data-testid="stHeader"] { background: transparent !important; }
-    .stApp > header { background: transparent !important; }
+    [data-testid="stHeader"],
+    .stApp > header {
+        background: transparent !important;
+        pointer-events: none !important;
+    }
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="stHeader"] button {
+        pointer-events: auto !important;
+    }
     [data-testid="stMain"] > div.block-container,
     section.main > div.block-container,
-    .main .block-container { padding-top: 0 !important; }
+    .main .block-container,
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 0 !important;
+    }
+    .stApp { padding-top: 0 !important; }
     </style>
     """,
     unsafe_allow_html=True,

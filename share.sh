@@ -46,6 +46,35 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+# Spinner helper: run a loop printing a spinner + elapsed seconds until
+# the supplied condition returns 0, or until the timeout is hit.
+# Usage:
+#   spin_until "Waiting for X" 60 "command that returns 0 when ready"
+SPIN_FRAMES=('|' '/' '-' '\')
+spin_until() {
+    local label="$1"
+    local timeout="$2"
+    local condition="$3"
+    local start now elapsed i=0 frame
+    start=$(date +%s)
+    while ! eval "$condition"; do
+        now=$(date +%s)
+        elapsed=$((now - start))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            printf "\r\033[K"
+            echo "  ✗ $label timed out after ${timeout}s."
+            return 1
+        fi
+        frame=${SPIN_FRAMES[$((i % ${#SPIN_FRAMES[@]}))]}
+        i=$((i + 1))
+        printf "\r  %s %s (%ds elapsed)" "$frame" "$label" "$elapsed"
+        sleep 0.15
+    done
+    printf "\r\033[K"
+    echo "  ✓ $label"
+    return 0
+}
+
 # 4. Start streamlit in the background.
 echo "[1/2] Starting Streamlit on port $PORT..."
 streamlit run app.py \
@@ -54,13 +83,12 @@ streamlit run app.py \
     > "$STREAMLIT_LOG" 2>&1 &
 STREAMLIT_PID=$!
 
-# Wait for it to bind.
-for _ in $(seq 1 60); do
-    if curl -fsS "http://localhost:$PORT" -o /dev/null 2>/dev/null; then
-        break
-    fi
-    sleep 0.5
-done
+spin_until "Waiting for Streamlit to bind" 60 \
+    "curl -fsS 'http://localhost:$PORT' -o /dev/null 2>/dev/null" || {
+        echo "[error] Streamlit did not start. Log tail:"
+        tail -n 20 "$STREAMLIT_LOG"
+        exit 1
+    }
 
 # 5. Open the localhost.run tunnel.
 echo "[2/2] Opening localhost.run tunnel..."
@@ -76,17 +104,11 @@ ssh \
     > "$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
 
-# Wait for the URL to appear in the SSH output.
-URL=""
-for _ in $(seq 1 60); do
-    URL=$(grep -oE 'https://[a-z0-9-]+\.(lhr\.life|lhrtunnel\.link)' "$TUNNEL_LOG" | head -1 || true)
-    [ -n "$URL" ] && break
-    # Bail early if SSH already gave up.
-    if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
-        break
-    fi
-    sleep 1
-done
+# Wait for the URL to appear in the SSH output (or for ssh to give up).
+spin_until "Connecting to localhost.run" 60 \
+    "[ -n \"\$(grep -oE 'https://[a-z0-9-]+\\.(lhr\\.life|lhrtunnel\\.link)' \"$TUNNEL_LOG\" 2>/dev/null | head -1)\" ] || ! kill -0 $TUNNEL_PID 2>/dev/null" || true
+
+URL=$(grep -oE 'https://[a-z0-9-]+\.(lhr\.life|lhrtunnel\.link)' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
 
 if [ -z "$URL" ]; then
     echo ""

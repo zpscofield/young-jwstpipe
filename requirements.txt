@@ -4,6 +4,7 @@ jwst
 matplotlib
 numpy
 photutils
+Pillow
 pyyaml
 requests
 scipy

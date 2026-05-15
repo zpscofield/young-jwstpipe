@@ -43,6 +43,13 @@ from mast_lookup import (
     resolve_target,
 )
 from mast_download import get_uncal_products, download_uncal_products
+from color_image import (
+    default_hues_for_filters,
+    find_i2d_files,
+    make_color_image,
+    sort_filters_by_wavelength,
+)
+from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -333,6 +340,27 @@ def run_pipeline_streaming() -> int:
                 state="error",
             )
         return return_code
+
+
+def _scan_observations_with_i2d(output_dir: str) -> list[str]:
+    """Return obs_name folders under output_dir that contain stage 3 i2d files."""
+    base = Path(output_dir).expanduser()
+    if not base.is_dir():
+        return []
+    found: list[str] = []
+    for child in sorted(base.iterdir()):
+        if not child.is_dir():
+            continue
+        if any(child.glob("stage3_output/*/output_files/*_i2d.fits")):
+            found.append(child.name)
+    return found
+
+
+def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
+    """Return filters present in <output_dir>/<obs_name>, sorted by wavelength."""
+    obs_dir = Path(output_dir).expanduser() / obs_name
+    filter_paths = find_i2d_files(obs_dir, obs_name)
+    return sort_filters_by_wavelength(filter_paths.keys())
 
 
 def _get(config: dict, key: str, default):
@@ -990,6 +1018,158 @@ new_config["crds_server_url"] = st.text_input(
     "CRDS server URL",
     value=_get(current, "crds_server_url", "https://jwst-crds.stsci.edu"),
 )
+
+
+# 6. Color image
+st.header("6. Color image")
+st.caption(
+    "Build a single color TIFF from your stage 3 i2d mosaics. Each filter is "
+    "also saved as a stretched grayscale TIFF so you can edit them in Photoshop."
+)
+
+new_config["color_image_enabled"] = st.checkbox(
+    "Create color image after pipeline run",
+    value=bool(_get(current, "color_image_enabled", False)),
+    help="When checked, the color image is generated automatically for each observation at the end of the pipeline.",
+)
+
+ci_left, ci_right = st.columns(2)
+with ci_left:
+    new_config["color_image_min_level"] = st.number_input(
+        "Stretch min level",
+        min_value=0.0,
+        max_value=10.0,
+        value=float(_get(current, "color_image_min_level", 0.001)),
+        step=0.001,
+        format="%.4f",
+        help="Pixel floor for the asinh stretch. Values at or below this become black.",
+    )
+    new_config["color_image_max_quantile"] = st.slider(
+        "Stretch max quantile",
+        min_value=0.95,
+        max_value=1.0,
+        value=float(_get(current, "color_image_max_quantile", 0.99999)),
+        step=0.0001,
+        format="%.5f",
+        help="The pixel value at this quantile defines the stretch ceiling.",
+    )
+with ci_right:
+    new_config["color_image_gamma"] = st.slider(
+        "Gamma",
+        min_value=0.5,
+        max_value=4.0,
+        value=float(_get(current, "color_image_gamma", 2.2)),
+        step=0.1,
+        help="Final gamma correction. Higher = darker midtones.",
+    )
+
+# Per-observation: pick which to (re)generate and configure per-filter hues.
+ci_output_dir = new_config.get("output_directory") or "."
+ci_obs_list = _scan_observations_with_i2d(ci_output_dir)
+
+# Start from whatever hues are in the saved config; we'll layer the user's
+# new picks on top before save.
+saved_hues = dict(_get(current, "color_image_filter_hues", {}) or {})
+new_hues = dict(saved_hues)
+
+if not ci_obs_list:
+    st.info(
+        "Run the pipeline first to produce stage 3 i2d files, then come back here "
+        "to generate a color image."
+    )
+    selected_obs = None
+else:
+    if len(ci_obs_list) == 1:
+        selected_obs = ci_obs_list[0]
+        st.caption(f"Observation: `{selected_obs}`")
+    else:
+        selected_obs = st.selectbox(
+            "Observation to (re)generate",
+            ci_obs_list,
+            key="color_image_obs_choice",
+        )
+
+    filters_present = _filters_in_observation(ci_output_dir, selected_obs)
+    n_filters = len(filters_present)
+
+    if n_filters == 0:
+        st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
+    elif n_filters == 1:
+        st.info(
+            f"Only one filter ({filters_present[0]}) is available. "
+            "The per-filter stretched TIFF will still be saved; no combined color image."
+        )
+    elif n_filters == 2:
+        st.caption(
+            f"Two filters detected ({filters_present[0]} and {filters_present[1]}). "
+            "Combined image will use the luminance-preserving recipe: "
+            f"blue = {filters_present[0]}, red = {filters_present[1]}, green = mean."
+        )
+    else:
+        st.caption(
+            f"{n_filters} filters detected. Set a hue (0°–360°) for each — defaults "
+            "follow a wavelength ramp (240° = blue at the shortest wavelength, "
+            "0° = red at the longest)."
+        )
+        defaults = default_hues_for_filters(filters_present)
+        # Render hue inputs in up-to-3 columns.
+        cols = st.columns(min(3, n_filters))
+        for i, filt in enumerate(filters_present):
+            with cols[i % len(cols)]:
+                wl = FILTER_PIVOT_WAVELENGTHS_UM.get(filt)
+                label = f"{filt}" + (f" ({wl} µm)" if wl else "")
+                default_value = float(saved_hues.get(filt, defaults.get(filt, 120.0)))
+                new_hues[filt] = float(
+                    st.number_input(
+                        label,
+                        min_value=0.0,
+                        max_value=360.0,
+                        value=default_value,
+                        step=5.0,
+                        key=f"hue_{filt}",
+                    )
+                )
+
+new_config["color_image_filter_hues"] = new_hues
+
+# Generate button + preview.
+if selected_obs is not None and _filters_in_observation(ci_output_dir, selected_obs):
+    if st.button("Generate color image now", key="color_image_generate"):
+        save_config(new_config)
+        obs_dir_path = Path(ci_output_dir).expanduser() / selected_obs
+        with st.spinner(f"Generating color image for {selected_obs}…"):
+            try:
+                result = make_color_image(
+                    obs_dir=obs_dir_path,
+                    target=selected_obs,
+                    min_level=float(new_config["color_image_min_level"]),
+                    max_quantile=float(new_config["color_image_max_quantile"]),
+                    gamma=float(new_config["color_image_gamma"]),
+                    filter_hues=new_hues,
+                )
+            except Exception as exc:
+                st.error(f"Color image generation failed: {exc}")
+                result = None
+
+        if result is not None:
+            preview = result.get("preview")
+            if preview and Path(preview).exists():
+                st.session_state[f"color_preview_{selected_obs}"] = str(preview)
+            if result.get("tiff"):
+                st.success(f"Saved color TIFF to `{result['tiff']}`")
+            per_filter = result.get("per_filter_tiffs", {})
+            if per_filter:
+                with st.expander(f"Per-filter stretched TIFFs ({len(per_filter)})"):
+                    for filt, path in per_filter.items():
+                        st.code(f"{filt}: {path}", language=None)
+
+    preview_path = st.session_state.get(f"color_preview_{selected_obs}")
+    if preview_path and Path(preview_path).exists():
+        st.image(
+            preview_path,
+            caption=f"Color image preview — {selected_obs}",
+            width=600,
+        )
 
 
 # Preserve any keys we didn't render so we don't accidentally drop them.

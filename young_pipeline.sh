@@ -272,6 +272,24 @@ run_pipeline() {
         echo ""
     fi
 
+    COLOR_IMAGE_ENABLED=$(get_yaml_value 'color_image_enabled' "$CONFIG_FILE")
+    if [[ "$COLOR_IMAGE_ENABLED" == "true" ]]; then
+        echo "« Creating color image »"
+        echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
+        COLOR_MIN_LEVEL=$(get_yaml_value 'color_image_min_level' "$CONFIG_FILE")
+        COLOR_MAX_QUANTILE=$(get_yaml_value 'color_image_max_quantile' "$CONFIG_FILE")
+        COLOR_GAMMA=$(get_yaml_value 'color_image_gamma' "$CONFIG_FILE")
+        COLOR_HUES=$(get_yaml_value 'color_image_filter_hues' "$CONFIG_FILE")
+        python "$PIPELINE_DIR/utils/color_image.py" \
+            --obs-dir "$OBS_DIR" \
+            --target "$OBS_NAME" \
+            --min-level "${COLOR_MIN_LEVEL:-0.001}" \
+            --max-quantile "${COLOR_MAX_QUANTILE:-0.99999}" \
+            --gamma "${COLOR_GAMMA:-2.2}" \
+            --filter-hues "${COLOR_HUES:-{}}"
+        echo ""
+    fi
+
     echo "===================="
     echo " Pipeline completed "
     echo "===================="

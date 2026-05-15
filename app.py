@@ -52,6 +52,29 @@ RESOURCES = REPO_ROOT / "resources"
 MAX_LOG_LINES = 500
 
 
+def _resolve_data_dir(text_dest: str) -> str:
+    """Return the data_directory value for a given Data-directory text input.
+
+    Prefers the path returned by the most recent successful download
+    (stored as 'resolved_data_directory' in session state, absolute) when
+    it still matches what the user has in the text box. If the user has
+    edited the text box away from that path, drop the resolved entry so
+    the new typed value wins.
+    """
+    resolved = st.session_state.get("resolved_data_directory")
+    if resolved:
+        try:
+            typed = Path(text_dest).expanduser().resolve()
+            cached = Path(resolved).expanduser().resolve()
+            if typed == cached:
+                return str(cached)
+        except OSError:
+            pass
+        # The user edited the field; forget the resolved entry.
+        st.session_state.pop("resolved_data_directory", None)
+    return text_dest
+
+
 @st.cache_data
 def _data_uri(relative_path: str, mime: str) -> str:
     data = (RESOURCES / relative_path).read_bytes()
@@ -578,9 +601,10 @@ if data_source_mode == "MAST lookup by target name":
         )
     with col_d:
         target_dest = st.text_input(
-            "Download to",
+            "Data directory",
             value=_get(current, "data_directory", "./data"),
             key="target_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
         )
 
     if st.button("Search MAST", key="search_target"):
@@ -634,7 +658,8 @@ if data_source_mode == "MAST lookup by target name":
                     session_key="aladin_target",
                 )
 
-    new_config["data_directory"] = st.session_state.get("resolved_data_directory", target_dest)
+    new_config["data_directory"] = _resolve_data_dir(target_dest)
+    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 elif data_source_mode == "MAST lookup by RA / Dec":
     col_ra, col_dec, col_r, col_d = st.columns([1, 1, 1, 2])
@@ -669,9 +694,10 @@ elif data_source_mode == "MAST lookup by RA / Dec":
         )
     with col_d:
         coord_dest = st.text_input(
-            "Download to",
+            "Data directory",
             value=_get(current, "data_directory", "./data"),
             key="coord_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
         )
 
     if st.button("Search MAST", key="search_coord"):
@@ -710,7 +736,8 @@ elif data_source_mode == "MAST lookup by RA / Dec":
             session_key="aladin_coord",
         )
 
-    new_config["data_directory"] = st.session_state.get("resolved_data_directory", coord_dest)
+    new_config["data_directory"] = _resolve_data_dir(coord_dest)
+    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 elif data_source_mode == "MAST lookup by program ID":
     col_p, col_d = st.columns([2, 3])
@@ -722,9 +749,10 @@ elif data_source_mode == "MAST lookup by program ID":
         )
     with col_d:
         prop_dest = st.text_input(
-            "Download to",
+            "Data directory",
             value=_get(current, "data_directory", "./data"),
             key="prop_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
         )
 
     if st.button("Search MAST", key="search_proposal"):
@@ -753,7 +781,8 @@ elif data_source_mode == "MAST lookup by program ID":
         if downloaded_path:
             st.session_state["resolved_data_directory"] = downloaded_path
 
-    new_config["data_directory"] = st.session_state.get("resolved_data_directory", prop_dest)
+    new_config["data_directory"] = _resolve_data_dir(prop_dest)
+    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 else:  # Use existing directory
     new_config["data_directory"] = st.text_input(

@@ -35,36 +35,39 @@ is_comma_list() {
 
 crds_bestrefs_for_uncal_input() {
     local uncal_input="$1"
+    local uncal_files=()
 
-    # Case A: comma-separated list of files
+    # Globs need to be expanded by the shell (not passed as literal strings)
+    # so CRDS sees a list of real files. nullglob avoids handing CRDS the
+    # raw pattern when nothing matches.
+    shopt -s nullglob
+
     if is_comma_list "$uncal_input"; then
+        # Comma-separated list of files; gather unique parent directories
+        # and glob each one for jw*uncal.fits.
         IFS=',' read -r -a files <<< "$uncal_input"
         declare -A uniq_dirs
         for f in "${files[@]}"; do
             [ -n "$f" ] || continue
-            d=$(dirname "$f")
-            uniq_dirs["$d"]=1
+            uniq_dirs[$(dirname "$f")]=1
         done
         for d in "${!uniq_dirs[@]}"; do
-            crds bestrefs --files "${d}/jw*uncal.fits" --sync-references=1
+            uncal_files+=( "$d"/jw*uncal.fits )
         done
-        return 0
+    elif [ -d "$uncal_input" ]; then
+        uncal_files=( "$uncal_input"/jw*uncal.fits )
+    elif [ -f "$uncal_input" ]; then
+        uncal_files=( "$uncal_input" )
     fi
 
-    # Case B: directory
-    if [ -d "$uncal_input" ]; then
-        crds bestrefs --files "${uncal_input}/jw*uncal.fits" --sync-references=1
-        return 0
+    shopt -u nullglob
+
+    if [ ${#uncal_files[@]} -eq 0 ]; then
+        echo "[Error] No uncal files found at: $uncal_input"
+        return 1
     fi
 
-    # Case C: single file
-    if [ -f "$uncal_input" ]; then
-        crds bestrefs --files "$uncal_input" --sync-references=1
-        return 0
-    fi
-
-    echo "[Error] UNCAL input not found: $uncal_input"
-    return 1
+    crds bestrefs --files "${uncal_files[@]}" --sync-references=1
 }
 
 delete_stage3_directory_if_exists() {

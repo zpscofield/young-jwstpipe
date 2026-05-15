@@ -358,6 +358,16 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
     all_noise = xnoise + ynoise
     all_noise -= np.nanmean(all_noise)
 
+    # Guard: the intermediate baseline/median steps can produce NaN whenever a
+    # full row or column of an amplifier region is source-masked (e.g. near
+    # cluster cores). We don't want those algorithmic NaNs to leak into the
+    # denoised output -- only positions that were NaN in the input should be
+    # NaN in the output. Zero out the noise at any position that was finite
+    # in the input but ended up NaN here.
+    finite_input = ~np.isnan(ori_imag_cache)
+    unwanted_nan = np.isnan(all_noise) & finite_input
+    if unwanted_nan.any():
+        all_noise[unwanted_nan] = 0.0
 
     denoise = ori_imag - all_noise
     denoise[np.isnan(ori_imag_cache)] = np.nan
@@ -365,8 +375,23 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
 
     return denoise, all_noise
 
+
+def _cfnoise_output_names(input_path: str) -> tuple[str, str]:
+    """Given a _cal.fits or _cal_wisp.fits input path, return the (denoised, model) output paths."""
+    if "_cal_wisp.fits" in input_path:
+        denoised = input_path.replace("_cal_wisp.fits", "_cal_cfnoise.fits")
+        model = input_path.replace("_cal_wisp.fits", "_cal_cfnoise_model.fits")
+    elif "_cal.fits" in input_path:
+        denoised = input_path.replace("_cal.fits", "_cal_cfnoise.fits")
+        model = input_path.replace("_cal.fits", "_cal_cfnoise_model.fits")
+    else:
+        denoised = input_path.replace(".fits", "_cfnoise.fits")
+        model = input_path.replace(".fits", "_cfnoise_model.fits")
+    return denoised, model
+
+
 def process_file(args):
-    log, f, output_dir, suffix = args  # Unpack the tuple
+    log, f, output_dir = args  # Unpack the tuple
     log.info(f'File name: {f}')
     data = fits.open(f)
     ori_imag = data[1].data
@@ -381,60 +406,55 @@ def process_file(args):
     save_denoise = cp.deepcopy(ori_imag)
     save_denoise[isnan] = np.nan
     data[1].data = save_denoise
-    new_suffix = "_cfnoise"
-    try:
-        output_filename = f.replace(f"_cal{suffix}.fits", f"_cal{new_suffix}.fits")
-        data.writeto(output_filename, overwrite = True)
-    except:
-        output_filename = f.replace("_cal.fits", f"_cal{new_suffix}.fits")
-        data.writeto(output_filename, overwrite = True)
-    log.info(f'Result saved: {output_filename}')
+
+    denoised_path, model_path = _cfnoise_output_names(f)
+    data.writeto(denoised_path, overwrite=True)
+    log.info(f'Result saved: {denoised_path}')
 
     noise_model = ori_imag_cache - ori_imag
     data[1].data = noise_model
-
-    try:
-        output_filename = f.replace(f"_cal{suffix}.fits", f"_cal{new_suffix}_model.fits")
-        data.writeto(output_filename, overwrite = True)
-
-    except:
-        output_filename = f.replace("_cal.fits", f"_cal_fnoise_model.fits")
-        data.writeto(output_filename, overwrite = True)
-
-
-    log.info(f'Result saved: {output_filename}')
+    data.writeto(model_path, overwrite=True)
+    log.info(f'Result saved: {model_path}')
     data.close()
 
-def process_files(log, files, nproc, output_dir, suffix):
+
+def process_files(log, files, nproc, output_dir):
     effective_nproc = nproc
-    task_args = [(log, img, output_dir, suffix) for img in files]
+    task_args = [(log, img, output_dir) for img in files]
     if effective_nproc != 0:
         with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(files), file=sys.stdout) as pbar:
                 for _ in pool.imap_unordered(process_file, task_args):
                     pbar.update(1)
 
-def parse_args():
 
-    parser = argparse.ArgumentParser(description='Measure and remove horizontal and vertical striping pattern (1/f noise) from rate file')
-    parser.add_argument('--files', dest='files', action='store', nargs='+', type=str, required=False, default='./*_cal.fits')
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Measure and remove horizontal and vertical striping pattern (1/f noise) from cal files.'
+    )
+    parser.add_argument('--files', dest='files', action='store', nargs='+', type=str, required=False,
+                        default='./*_cal.fits',
+                        help='Input files. Both *_cal.fits and *_cal_wisp.fits are accepted; the output filename is derived per-file.')
     parser.add_argument('--nproc', dest='nproc', action='store', type=int, required=False, default=6)
     parser.add_argument('--output_dir', dest='output_dir', action='store', type=str, required=False, default='./')
-    parser.add_argument('--suffix', dest='suffix', action='store', type=str, required=False, default='_wisp')
     args = parser.parse_args()
-
     return args
 
 
 if __name__=='__main__':
-    # Get the command line arguments
     args = parse_args()
     log, log_file_path = setup_logger(args.output_dir)
-    # Process the input files
-    results = process_files(log, **vars(args))
-    files_to_remove = glob(os.path.join(args.output_dir, "**", f"*_cal{args.suffix}.fits"), recursive=True)
+    process_files(log, **vars(args))
+    # Remove the original inputs (both cal and cal_wisp variants) now that
+    # they have been superseded by *_cal_cfnoise.fits.
+    patterns = ["*_cal.fits", "*_cal_wisp.fits"]
+    files_to_remove: list[str] = []
+    for pat in patterns:
+        files_to_remove.extend(glob(os.path.join(args.output_dir, "**", pat), recursive=True))
     for file in files_to_remove:
-        os.remove(file)
-        log.info(f'removed {file}')
-    log.info('removed previous files.')
+        try:
+            os.remove(file)
+            log.info(f'removed {file}')
+        except OSError as exc:
+            log.warning(f'could not remove {file}: {exc}')
     log.info('fnoise_reduction.py complete.')

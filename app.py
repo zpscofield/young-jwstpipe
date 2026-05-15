@@ -132,7 +132,6 @@ def _banner_html() -> str:
 PIPELINE_STEPS = [
     "download_uncal_references",
     "stage1",
-    "fnoise_correction",
     "download_rate_references",
     "stage2",
     "wisp_subtraction",
@@ -823,7 +822,6 @@ nproc_cols = st.columns(3)
 nproc_fields = [
     ("stage1_nproc", "Stage 1"),
     ("stage2_nproc", "Stage 2"),
-    ("fnoise_nproc", "1/f noise (rate)"),
     ("wisp_nproc", "WISP subtraction"),
     ("cfnoise_nproc", "1/f noise (cal)"),
     ("bkg_nproc", "Background subtraction"),

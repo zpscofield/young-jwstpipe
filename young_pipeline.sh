@@ -81,14 +81,12 @@ delete_stage3_directory_if_exists() {
 combine_observations=$(get_yaml_value 'combine_observations' "$CONFIG_FILE")
 group_by_directory=$(get_yaml_value 'group_by_directory' "$CONFIG_FILE")
 custom_name=$(get_yaml_value 'custom_name' "$CONFIG_FILE")
-full_exposure_striping=$(get_yaml_value 'full_exposure_striping' "$CONFIG_FILE")
 
 PIPELINE_DIR=$(get_yaml_value 'pipeline_directory' "$CONFIG_FILE")
 MY_CRDS_PATH=$(get_yaml_value 'crds_path' "$CONFIG_FILE")
 MY_CRDS_SERVER_URL=$(get_yaml_value 'crds_server_url' "$CONFIG_FILE")
 WISP_DIR=$(get_yaml_value 'wisp_directory' "$CONFIG_FILE")
 STAGE1_NPROC=$(get_yaml_value 'stage1_nproc' "$CONFIG_FILE")
-FNOISE_NPROC=$(get_yaml_value 'fnoise_nproc' "$CONFIG_FILE")
 STAGE2_NPROC=$(get_yaml_value 'stage2_nproc' "$CONFIG_FILE")
 WISP_NPROC=$(get_yaml_value 'wisp_nproc' "$CONFIG_FILE")
 CF_NPROC=$(get_yaml_value 'cfnoise_nproc' "$CONFIG_FILE")
@@ -112,7 +110,6 @@ run_pipeline() {
     LOG_FILE1="$OBS_DIR/logs/pipeline_stage1.log"
     LOG_FILE2="$OBS_DIR/logs/pipeline_stage2.log"
     LOG_FILE3="$OBS_DIR/logs/pipeline_stage3.log"
-    LOG_FILEF="$OBS_DIR/logs/pipeline_fnoise.log"
     LOG_FILEW="$OBS_DIR/logs/pipeline_wisp.log"
     LOG_FILEB="$OBS_DIR/logs/pipeline_bkg.log"
     LOG_FILECF="$OBS_DIR/logs/pipeline_cfnoise.log"
@@ -156,21 +153,6 @@ run_pipeline() {
     fi
 
 
-    if ! should_skip_step "fnoise_correction"; then
-        echo "« Correcting 1/f noise »"
-        echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        echo "Accessing flat files before beginning calibration..."
-        if [[ "$full_exposure_striping" == "true" ]]; then
-            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output" 
-        else
-            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output"
-        fi
-        echo ""
-    else
-        echo "[1/f noise correction skipped]"
-        echo ""
-    fi
-
     if ! should_skip_step "download_rate_references"; then
         echo "« Downloading references for rate.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
@@ -207,29 +189,22 @@ run_pipeline() {
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
-        # Run cfnoise in two passes so every cal file ends up as *_cal_cfnoise.fits,
-        # regardless of whether wisp_subtraction produced a wisp-corrected version
-        # for it. Pass 1: files that came out of wisp (*_cal_wisp.fits). Pass 2:
-        # any *_cal.fits left behind (wisp failed for them, or wisp_subtraction
-        # was skipped entirely).
-        if compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
-            echo "[Pass 1: processing *_cal_wisp.fits files]"
-            python "$PIPELINE_DIR/utils/fnoise_reduction.py" \
-                --files $OBS_DIR/stage2_output/jw*cal_wisp.fits \
-                --output_dir "$OBS_DIR/stage2_output" \
-                --suffix "_wisp" \
-                --nproc "$CF_NPROC"
-        fi
+        # Collect cal files of both flavors in one shot so multiprocessing
+        # has the full work list. fnoise_reduction.py derives the output
+        # filename from each input's actual name.
+        shopt -s nullglob
+        CFNOISE_INPUTS=( "$OBS_DIR"/stage2_output/jw*cal.fits "$OBS_DIR"/stage2_output/jw*cal_wisp.fits )
+        shopt -u nullglob
 
-        if compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
-            echo "[Pass 2: processing remaining *_cal.fits files]"
+        if [ ${#CFNOISE_INPUTS[@]} -gt 0 ]; then
+            echo "[Processing ${#CFNOISE_INPUTS[@]} files]"
             python "$PIPELINE_DIR/utils/fnoise_reduction.py" \
-                --files $OBS_DIR/stage2_output/jw*cal.fits \
+                --files "${CFNOISE_INPUTS[@]}" \
                 --output_dir "$OBS_DIR/stage2_output" \
-                --suffix "" \
                 --nproc "$CF_NPROC"
+        else
+            echo "[No cal files found in $OBS_DIR/stage2_output]"
         fi
-
         echo ""
 
     else

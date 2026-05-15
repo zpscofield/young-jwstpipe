@@ -1,7 +1,7 @@
 crds_path: /home/zpscofield/crds_cache
 crds_server_url: https://jwst-crds.stsci.edu
 pipeline_directory: .
-data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/data
+data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/A209data
 output_directory: .
 combine_observations: false
 custom_name: Combined_Observation
@@ -37,5 +37,4 @@ extract_wht: true
 extract_var_poisson: false
 extract_var_rnoise: false
 extract_var_flat: false
-skip_steps:
-- download_uncal_references
+skip_steps: []

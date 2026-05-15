@@ -659,7 +659,7 @@ if data_source_mode == "MAST lookup by target name":
                 )
 
     new_config["data_directory"] = _resolve_data_dir(target_dest)
-    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 elif data_source_mode == "MAST lookup by RA / Dec":
     col_ra, col_dec, col_r, col_d = st.columns([1, 1, 1, 2])

@@ -280,13 +280,20 @@ run_pipeline() {
         COLOR_MAX_QUANTILE=$(get_yaml_value 'color_image_max_quantile' "$CONFIG_FILE")
         COLOR_GAMMA=$(get_yaml_value 'color_image_gamma' "$CONFIG_FILE")
         COLOR_HUES=$(get_yaml_value 'color_image_filter_hues' "$CONFIG_FILE")
+        COLOR_SUBTRACT_SKY=$(get_yaml_value 'color_image_subtract_sky' "$CONFIG_FILE")
+        if [[ "$COLOR_SUBTRACT_SKY" == "false" ]]; then
+            SKY_FLAG="--no-subtract-sky"
+        else
+            SKY_FLAG="--subtract-sky"
+        fi
         python "$PIPELINE_DIR/utils/color_image.py" \
             --obs-dir "$OBS_DIR" \
             --target "$OBS_NAME" \
             --min-level "${COLOR_MIN_LEVEL:-0.001}" \
             --max-quantile "${COLOR_MAX_QUANTILE:-0.99999}" \
             --gamma "${COLOR_GAMMA:-2.2}" \
-            --filter-hues "${COLOR_HUES:-{}}"
+            --filter-hues "${COLOR_HUES:-{}}" \
+            $SKY_FLAG
         echo ""
     fi
 

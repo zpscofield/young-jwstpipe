@@ -33,10 +33,38 @@ from typing import Iterable
 
 import numpy as np
 from astropy.io import fits
+from astropy.stats import sigma_clipped_stats
 from PIL import Image
 
 from log_utils import archive_existing_log
 from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
+
+
+# ---------------------------------------------------------------------------
+# Sky normalization
+# ---------------------------------------------------------------------------
+
+def estimate_sky_level(
+    data: np.ndarray, sigma: float = 3.0, maxiters: int = 5
+) -> float:
+    """Return a robust per-filter sky level via sigma-clipped median.
+
+    Bright sources (and any leftover hot pixels) clip out after a few
+    iterations, so the median converges on the residual sky pedestal
+    left over after stage-2/3 background subtraction. This is what we
+    subtract to make sure every filter's true sky maps to the same
+    'black' before the asinh stretch.
+    """
+    _mean, median, _std = sigma_clipped_stats(data, sigma=sigma, maxiters=maxiters)
+    return float(median)
+
+
+def subtract_sky(
+    data: np.ndarray, sigma: float = 3.0, maxiters: int = 5
+) -> tuple[np.ndarray, float]:
+    """Return (sky-subtracted data, sky level)."""
+    sky = estimate_sky_level(data, sigma=sigma, maxiters=maxiters)
+    return data - sky, sky
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +250,7 @@ def make_color_image(
     max_quantile: float = 0.99999,
     gamma: float = 2.2,
     filter_hues: dict[str, float] | None = None,
+    subtract_sky_per_filter: bool = True,
     log: logging.Logger | None = None,
 ) -> dict:
     """Top-level entry. See module docstring for output layout."""
@@ -241,11 +270,18 @@ def make_color_image(
     # Stretch each filter and save its grayscale TIFF.
     stretched: dict[str, np.ndarray] = {}
     per_filter_tiffs: dict[str, Path] = {}
+    sky_levels: dict[str, float] = {}
     for name in filters_sorted:
         i2d_path = filter_paths[name]
         log.info(f"Stretching {name} from {i2d_path}")
         with fits.open(i2d_path) as hdul:
             data = hdul[1].data.astype(np.float64)
+
+        if subtract_sky_per_filter:
+            data, sky_level = subtract_sky(data)
+            sky_levels[name] = sky_level
+            log.info(f"{name}: subtracted sky level {sky_level:.6f}")
+
         s = asinh_stretch(data, min_level=min_level, max_quantile=max_quantile, gamma=gamma)
         stretched[name] = s.astype(np.float32)
 
@@ -259,6 +295,7 @@ def make_color_image(
         "tiff": None,
         "preview": None,
         "per_filter_tiffs": per_filter_tiffs,
+        "sky_levels": sky_levels,
         "n_filters": n,
     }
 
@@ -352,6 +389,12 @@ def parse_args() -> argparse.Namespace:
         default="{}",
         help='JSON dict of {filter_name: hue_degrees}, e.g. \'{"F090W":240,"F277W":120}\'. Missing entries default to a wavelength ramp.',
     )
+    parser.add_argument(
+        "--subtract-sky",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Estimate and subtract each filter's residual sky pedestal before stretching (default: on).",
+    )
     return parser.parse_args()
 
 
@@ -370,6 +413,7 @@ def main() -> None:
         max_quantile=args.max_quantile,
         gamma=args.gamma,
         filter_hues=filter_hues,
+        subtract_sky_per_filter=args.subtract_sky,
         log=log,
     )
     log.info("color_image.py complete.")

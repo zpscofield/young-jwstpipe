@@ -1033,6 +1033,17 @@ new_config["color_image_enabled"] = st.checkbox(
     help="When checked, the color image is generated automatically for each observation at the end of the pipeline.",
 )
 
+new_config["color_image_subtract_sky"] = st.checkbox(
+    "Auto-subtract residual sky per filter (recommended)",
+    value=bool(_get(current, "color_image_subtract_sky", True)),
+    help=(
+        "Each filter's stage-3 mosaic still has a small residual sky pedestal "
+        "after background subtraction. When this is on, a sigma-clipped median "
+        "is subtracted from each filter so that 'sky' maps to the same black "
+        "across all filters, removing color hue in empty regions."
+    ),
+)
+
 ci_left, ci_right = st.columns(2)
 with ci_left:
     new_config["color_image_min_level"] = st.number_input(
@@ -1146,6 +1157,7 @@ if selected_obs is not None and _filters_in_observation(ci_output_dir, selected_
                     max_quantile=float(new_config["color_image_max_quantile"]),
                     gamma=float(new_config["color_image_gamma"]),
                     filter_hues=new_hues,
+                    subtract_sky_per_filter=bool(new_config["color_image_subtract_sky"]),
                 )
             except Exception as exc:
                 st.error(f"Color image generation failed: {exc}")
@@ -1158,10 +1170,17 @@ if selected_obs is not None and _filters_in_observation(ci_output_dir, selected_
             if result.get("tiff"):
                 st.success(f"Saved color TIFF to `{result['tiff']}`")
             per_filter = result.get("per_filter_tiffs", {})
+            sky_levels = result.get("sky_levels", {}) or {}
             if per_filter:
                 with st.expander(f"Per-filter stretched TIFFs ({len(per_filter)})"):
                     for filt, path in per_filter.items():
-                        st.code(f"{filt}: {path}", language=None)
+                        if filt in sky_levels:
+                            st.code(
+                                f"{filt}  sky={sky_levels[filt]:+.5f}  {path}",
+                                language=None,
+                            )
+                        else:
+                            st.code(f"{filt}: {path}", language=None)
 
     preview_path = st.session_state.get(f"color_preview_{selected_obs}")
     if preview_path and Path(preview_path).exists():

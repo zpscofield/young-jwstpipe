@@ -42,4 +42,5 @@ color_image_enabled: false
 color_image_min_level: 0.001
 color_image_max_quantile: 0.99999
 color_image_gamma: 2.2
+color_image_subtract_sky: true
 color_image_filter_hues: {}

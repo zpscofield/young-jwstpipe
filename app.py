@@ -1268,6 +1268,20 @@ elif n_filters >= 3:
                 )
             )
 
+    # Reset to wavelength-ramp defaults. Saved hues from prior runs would
+    # otherwise stick around via the widget's session state, which makes it
+    # awkward to re-baseline when testing a new pipeline version.
+    reset_col, _reset_pad = st.columns([1, 4])
+    with reset_col:
+        if st.button(
+            "Reset hues to wavelength defaults",
+            key="reset_hues_to_defaults",
+            help="Restore each filter's hue to the wavelength ramp (shortest = 240°, longest = 0°).",
+        ):
+            for f in filters_present:
+                st.session_state[f"hue_{f}"] = float(defaults.get(f, 120.0))
+            st.rerun()
+
 new_config["color_image_filter_hues"] = new_hues
 
 # Permanent action row: Generate is disabled until stage-3 i2d files exist

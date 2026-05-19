@@ -342,20 +342,6 @@ def run_pipeline_streaming() -> int:
         return return_code
 
 
-def _scan_observations_with_i2d(output_dir: str) -> list[str]:
-    """Return obs_name folders under output_dir that contain stage 3 i2d files."""
-    base = Path(output_dir).expanduser()
-    if not base.is_dir():
-        return []
-    found: list[str] = []
-    for child in sorted(base.iterdir()):
-        if not child.is_dir():
-            continue
-        if any(child.glob("stage3_output/*/output_files/*_i2d.fits")):
-            found.append(child.name)
-    return found
-
-
 def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
     """Return filters present in <output_dir>/<obs_name>, sorted by wavelength."""
     obs_dir = Path(output_dir).expanduser() / obs_name
@@ -398,6 +384,66 @@ def _scan_uncal_filters(data_dir: str) -> list[str]:
     if n_files == 0:
         return []
     return _filters_in_uncal_dir(str(path), path.stat().st_mtime, n_files)
+
+
+def _expected_obs_names(config: dict, data_dir: str) -> list[str]:
+    """Predict the observation directory names the pipeline would create.
+
+    Mirrors the logic in utils/get_obs_info.py:
+      - group_by_directory=True : one obs per immediate subdir with uncal files
+      - combine_observations=True (overridden by above) : one obs = custom_name
+      - otherwise : one obs per PROGRAM id read from the uncal headers
+    """
+    if not data_dir:
+        return []
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+
+    if config.get("group_by_directory"):
+        names = []
+        for sub in sorted(path.iterdir()):
+            if not sub.is_dir():
+                continue
+            if any(sub.rglob("*_uncal.fits")):
+                cleaned = sub.name.replace(" ", "_").replace(".", "_")
+                names.append(f"Output_{cleaned}")
+        return names
+
+    if config.get("combine_observations"):
+        custom = str(config.get("custom_name") or "").strip()
+        return [custom or "Combined_Observation"]
+
+    # Default: group by PROGRAM id — requires reading primary headers.
+    from astropy.io import fits
+
+    programs: set[str] = set()
+    for f in path.glob("*_uncal.fits"):
+        try:
+            hdr = fits.getheader(str(f), ext=0)
+        except Exception:
+            continue
+        pid = str(hdr.get("PROGRAM", "00000")).strip() or "00000"
+        programs.add(pid)
+    return sorted(programs)
+
+
+def _expected_obs_with_i2d(config: dict, data_dir: str, output_dir: str) -> list[str]:
+    """Of the obs names this config would create, which already have i2d files?"""
+    expected = _expected_obs_names(config, data_dir)
+    if not expected:
+        return []
+    base = Path(output_dir).expanduser()
+    if not base.is_dir():
+        return []
+    matches: list[str] = []
+    for name in expected:
+        obs_dir = base / name
+        if obs_dir.is_dir() and any(
+            obs_dir.glob("stage3_output/*/output_files/*_i2d.fits")
+        ):
+            matches.append(name)
+    return matches
 
 
 def _get(config: dict, key: str, default):
@@ -1111,50 +1157,58 @@ with ci_right:
         help="Final gamma correction. Higher = darker midtones.",
     )
 
-# Per-observation: pick which to (re)generate and configure per-filter hues.
+# Decide whether this section is in "pre-run" (configure hues for the
+# upcoming pipeline) or "regenerate" (rebuild color image for an obs that
+# already finished) mode.
+#
+# The trigger is whether the obs directory the current config WOULD create
+# (custom_name, program ID, or per-subdir name) already exists with stage-3
+# i2d files. That way, changing data_directory or custom_name immediately
+# refocuses the section — old unrelated outputs in output_directory no
+# longer pollute the dropdown.
 ci_output_dir = new_config.get("output_directory") or "."
-ci_obs_list = _scan_observations_with_i2d(ci_output_dir)
+data_dir = new_config.get("data_directory") or ""
+uncal_filters = _scan_uncal_filters(data_dir)
+expected_with_i2d = _expected_obs_with_i2d(new_config, data_dir, ci_output_dir)
 
 # Start from whatever hues are in the saved config; we'll layer the user's
 # new picks on top before save.
 saved_hues = dict(_get(current, "color_image_filter_hues", {}) or {})
 new_hues = dict(saved_hues)
 
-# Determine the filter list to render hue inputs for. Prefer stage-3 i2d
-# files when they exist (authoritative); otherwise fall back to reading
-# FILTER headers from the uncal files so the user can configure hues
-# before the pipeline runs.
 selected_obs: str | None = None
 filters_present: list[str] = []
-filters_source: str = ""  # one of "i2d", "uncal", or ""
+filters_source: str = ""  # one of "uncal", "i2d", or ""
 
-if ci_obs_list:
-    if len(ci_obs_list) == 1:
-        selected_obs = ci_obs_list[0]
+if expected_with_i2d:
+    # The pipeline's target output for this config already exists — switch
+    # to regenerate mode using the authoritative i2d filter set.
+    if len(expected_with_i2d) == 1:
+        selected_obs = expected_with_i2d[0]
         st.caption(f"Observation: `{selected_obs}`")
     else:
         selected_obs = st.selectbox(
             "Observation to (re)generate",
-            ci_obs_list,
+            expected_with_i2d,
             key="color_image_obs_choice",
         )
     filters_present = _filters_in_observation(ci_output_dir, selected_obs)
     filters_source = "i2d"
-else:
-    filters_present = _scan_uncal_filters(new_config.get("data_directory") or "")
-    if filters_present:
-        filters_source = "uncal"
+elif uncal_filters:
+    filters_present = uncal_filters
+    filters_source = "uncal"
 
 n_filters = len(filters_present)
 
-if filters_source == "i2d" and n_filters == 0:
-    st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
-elif filters_source == "uncal":
+if filters_source == "uncal":
     st.caption(
-        f"{n_filters} filter(s) detected from uncal files: "
-        f"{', '.join(filters_present)}. Configure hues now — they'll be saved "
-        "to config and applied automatically at the end of the pipeline run."
+        f"{n_filters} filter(s) detected from uncal files in "
+        f"`{data_dir}`: {', '.join(filters_present)}. Configure hues now — "
+        "they'll be saved to config and applied automatically at the end "
+        "of the pipeline run."
     )
+elif filters_source == "i2d" and n_filters == 0:
+    st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
 elif not filters_present:
     st.info(
         "Point `data_directory` at uncal files (or run the pipeline first) "

@@ -141,7 +141,7 @@ def _banner_html() -> str:
                     YOUNG JWST Calibration Pipeline
                 </h1>
                 <p style="font-size: 1.05rem; margin-top: 10px; opacity: 0.95;">
-                    Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it — all from this page.
+                    Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it, all from this page.
                 </p>
             </div>
             <div style="

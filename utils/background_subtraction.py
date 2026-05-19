@@ -35,7 +35,9 @@ from astropy.convolution import (
     convolve, convolve_fft, Box2DKernel, Tophat2DKernel,
     Ring2DKernel, Gaussian2DKernel)
 from scipy.ndimage import median_filter
-from astropy.wcs import WCS
+from astropy.wcs import WCS, FITSFixedWarning
+from astropy.utils.exceptions import AstropyUserWarning
+import warnings
 import yaml
 import os
 #import dill # Just for debugging
@@ -327,7 +329,14 @@ class SubtractBackground:
         outfile = f"{prefix}_{self.suffix}.fits"
         # outpath = path.join(datadir,outfile)
         hdu = fits.open(fitsfile)
-        wcs = WCS(hdu['SCI'].header) # Attach WCS to it
+        # SCI headers carry SIP distortion terms and MJD-only date keys;
+        # astropy.wcs auto-fixes / drops them and emits noisy per-file
+        # warnings that flood the log. The basic WCS is all we need for
+        # the BKGSUB / TIERMASK extensions, so silence them here.
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', FITSFixedWarning)
+            warnings.simplefilter('ignore', AstropyUserWarning)
+            wcs = WCS(hdu['SCI'].header)
         # Replace or append the background-subtracted image
         # Replace
         if self.replace_sci:

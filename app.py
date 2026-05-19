@@ -1285,7 +1285,7 @@ session_preview = (
     st.session_state.get(f"color_preview_{selected_obs}") if selected_obs else None
 )
 
-ci_actions_left, ci_actions_right = st.columns([1, 1])
+ci_actions_left, ci_actions_mid, _ci_actions_right = st.columns([1, 1, 3])
 with ci_actions_left:
     gen_help = (
         f"Generate the color image for `{selected_obs}` using the hues above."
@@ -1301,7 +1301,7 @@ with ci_actions_left:
         disabled=not has_i2d,
         help=gen_help,
     )
-with ci_actions_right:
+with ci_actions_mid:
     show_preview = st.toggle(
         "Show color image preview",
         value=False,

@@ -342,6 +342,12 @@ def run_pipeline_streaming() -> int:
                 label=f"Pipeline exited with code {return_code}. See log above.",
                 state="error",
             )
+
+        # Stash the final log so it can be re-rendered on subsequent reruns
+        # (e.g. when the user toggles a widget elsewhere on the page). Without
+        # this the streamed log disappears the moment Streamlit re-executes.
+        st.session_state["last_pipeline_log"] = list(lines[-MAX_LOG_LINES:])
+        st.session_state["last_pipeline_return_code"] = return_code
         return return_code
 
 
@@ -494,8 +500,13 @@ new_config = dict(current)
 
 # st.divider()
 # st.caption(f"Editing {CONFIG_PATH}")
+# Dark rounded pill so the caption stays legible over bright spots in the banner.
 st.markdown(
-    f'<p style="text-align: center; font-size: 0.8rem; color: gray;">Editing {CONFIG_PATH}</p>',
+    f'<div style="text-align: center; margin: 0.25rem 0 0.75rem 0;">'
+    f'<span style="display: inline-block; font-size: 0.8rem; color: #e6e6e6; '
+    f'background-color: rgba(0, 0, 0, 0.6); padding: 3px 12px; '
+    f'border-radius: 12px;">Editing {CONFIG_PATH}</span>'
+    f'</div>',
     unsafe_allow_html=True,
 )
 
@@ -1256,63 +1267,103 @@ elif n_filters >= 3:
 
 new_config["color_image_filter_hues"] = new_hues
 
-# Generate button + preview.
-if selected_obs is not None and _filters_in_observation(ci_output_dir, selected_obs):
-    if st.button("Generate color image now", key="color_image_generate"):
-        save_config(new_config)
-        obs_dir_path = Path(ci_output_dir).expanduser() / selected_obs
-        with st.spinner(f"Generating color image for {selected_obs}…"):
-            try:
-                result = make_color_image(
-                    obs_dir=obs_dir_path,
-                    target=selected_obs,
-                    min_level=float(new_config["color_image_min_level"]),
-                    max_quantile=float(new_config["color_image_max_quantile"]),
-                    gamma=float(new_config["color_image_gamma"]),
-                    filter_hues=new_hues,
-                    subtract_sky_per_filter=bool(new_config["color_image_subtract_sky"]),
-                )
-            except Exception as exc:
-                st.error(f"Color image generation failed: {exc}")
-                result = None
+# Permanent action row: Generate is disabled until stage-3 i2d files exist
+# for the current configuration; the Show preview toggle is always available
+# and shows a friendly message when there's nothing to display.
+has_i2d = filters_source == "i2d"
+preview_disk_path: Path | None = None
+if selected_obs is not None:
+    candidate = (
+        Path(ci_output_dir).expanduser()
+        / selected_obs
+        / "color"
+        / f"{selected_obs}_color_preview.png"
+    )
+    if candidate.exists():
+        preview_disk_path = candidate
+session_preview = (
+    st.session_state.get(f"color_preview_{selected_obs}") if selected_obs else None
+)
 
-        if result is not None:
-            preview = result.get("preview")
-            if preview and Path(preview).exists():
-                st.session_state[f"color_preview_{selected_obs}"] = str(preview)
-            if result.get("tiff"):
-                st.success(f"Saved color TIFF to `{result['tiff']}`")
-            per_filter = result.get("per_filter_tiffs", {})
-            sky_levels = result.get("sky_levels", {}) or {}
-            if per_filter:
-                with st.expander(f"Per-filter stretched TIFFs ({len(per_filter)})"):
-                    for filt, path in per_filter.items():
-                        if filt in sky_levels:
-                            st.code(
-                                f"{filt}  sky={sky_levels[filt]:+.5f}  {path}",
-                                language=None,
-                            )
-                        else:
-                            st.code(f"{filt}: {path}", language=None)
-
-    # Prefer the path set by the manual "Generate" button (fresh from this
-    # session); otherwise fall back to the canonical disk location so the
-    # preview written by the auto-run-at-end-of-pipeline step still shows up.
-    preview_path = st.session_state.get(f"color_preview_{selected_obs}")
-    if not preview_path:
-        disk_preview = (
-            Path(ci_output_dir).expanduser()
-            / selected_obs
-            / "color"
-            / f"{selected_obs}_color_preview.png"
+ci_actions_left, ci_actions_right = st.columns([1, 1])
+with ci_actions_left:
+    gen_help = (
+        f"Generate the color image for `{selected_obs}` using the hues above."
+        if has_i2d
+        else (
+            "No stage-3 i2d files exist for the current configuration yet. "
+            "Run the pipeline first, or change data / output / custom_name settings."
         )
-        if disk_preview.exists():
-            preview_path = str(disk_preview)
-    if preview_path and Path(preview_path).exists():
+    )
+    generate_clicked = st.button(
+        "Generate color image now",
+        key="color_image_generate",
+        disabled=not has_i2d,
+        help=gen_help,
+    )
+with ci_actions_right:
+    show_preview = st.toggle(
+        "Show color image preview",
+        value=False,
+        key="show_color_preview_toggle",
+        help="Display the most recent preview PNG for this observation.",
+    )
+
+if generate_clicked and has_i2d:
+    save_config(new_config)
+    obs_dir_path = Path(ci_output_dir).expanduser() / selected_obs
+    with st.spinner(f"Generating color image for {selected_obs}…"):
+        try:
+            result = make_color_image(
+                obs_dir=obs_dir_path,
+                target=selected_obs,
+                min_level=float(new_config["color_image_min_level"]),
+                max_quantile=float(new_config["color_image_max_quantile"]),
+                gamma=float(new_config["color_image_gamma"]),
+                filter_hues=new_hues,
+                subtract_sky_per_filter=bool(new_config["color_image_subtract_sky"]),
+            )
+        except Exception as exc:
+            st.error(f"Color image generation failed: {exc}")
+            result = None
+
+    if result is not None:
+        preview = result.get("preview")
+        if preview and Path(preview).exists():
+            st.session_state[f"color_preview_{selected_obs}"] = str(preview)
+            session_preview = str(preview)
+        if result.get("tiff"):
+            st.success(f"Saved color TIFF to `{result['tiff']}`")
+        per_filter = result.get("per_filter_tiffs", {})
+        sky_levels = result.get("sky_levels", {}) or {}
+        if per_filter:
+            with st.expander(f"Per-filter stretched TIFFs ({len(per_filter)})"):
+                for filt, path in per_filter.items():
+                    if filt in sky_levels:
+                        st.code(
+                            f"{filt}  sky={sky_levels[filt]:+.5f}  {path}",
+                            language=None,
+                        )
+                    else:
+                        st.code(f"{filt}: {path}", language=None)
+
+# Toggle-controlled preview render. Falls back to the canonical disk path
+# so previews written by the in-pipeline color step appear without needing
+# the user to click "Generate".
+if show_preview:
+    preview_to_show = session_preview or (
+        str(preview_disk_path) if preview_disk_path else None
+    )
+    if preview_to_show and Path(preview_to_show).exists():
         st.image(
-            preview_path,
+            preview_to_show,
             caption=f"Color image preview — {selected_obs}",
             width=600,
+        )
+    else:
+        st.info(
+            "No color image preview available yet. Run the pipeline with "
+            "`color_image_enabled` on, or click **Generate color image now**."
         )
 
 
@@ -1348,14 +1399,19 @@ if run_clicked:
     save_config(new_config)
     st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
     run_pipeline_streaming()
-    st.session_state["pipeline_just_ran"] = True
-
-# After any pipeline run, expose a manual refresh button below the log panel
-# so the user can review the streamed log first and then explicitly trigger
-# a rerun to re-render the Color Image section against the new outputs.
-# If no preview was produced, the Color Image section above just stays empty
-# — that's intentional, no error needed.
-if st.session_state.get("pipeline_just_ran"):
-    if st.button("Show color image preview", key="show_color_preview_after_run"):
-        st.session_state["pipeline_just_ran"] = False
-        st.rerun()
+elif "last_pipeline_log" in st.session_state:
+    # Replay the last pipeline log so it survives Streamlit reruns from
+    # unrelated widget interactions. The buttons in the Color Image section
+    # above can refresh the page without erasing this panel.
+    last_rc = st.session_state.get("last_pipeline_return_code", 0)
+    if last_rc == 0:
+        replay_label = "Last pipeline run — finished successfully."
+        replay_state = "complete"
+    else:
+        replay_label = f"Last pipeline run — exited with code {last_rc}."
+        replay_state = "error"
+    with st.status(replay_label, expanded=True, state=replay_state):
+        components.html(
+            _log_panel_html(st.session_state["last_pipeline_log"]),
+            height=LOG_PANEL_HEIGHT_PX + 20,
+        )

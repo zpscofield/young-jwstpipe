@@ -418,9 +418,16 @@ if __name__ == "__main__":
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
     n_remaining = len(sorted_filter_dirs) - 1
-    mode = "multiprocessing" if use_multiprocessing else "series"
-    log.info(f'Finished. Starting stage 3 processing for {n_remaining} remaining filter(s) in {mode}.')
-    print(f'[Stage3] Processing {n_remaining} remaining filter(s) in {mode}...', flush=True)
+    if use_multiprocessing and n_remaining > 0:
+        n_workers = min(int(config.get('min_processes', 1)), n_remaining)
+        status_msg = (
+            f'Processing {n_remaining} other filter(s) in parallel '
+            f'with {n_workers} process(es).'
+        )
+    else:
+        status_msg = f'Processing {n_remaining} other filter(s) in series.'
+    log.info(f'Finished. {status_msg}')
+    print(f'[Stage3] {status_msg}', flush=True)
 
     path_longest = sorted_filter_dirs[0] + '/output_files/'
     convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])

@@ -316,15 +316,18 @@ def run_pipeline_streaming() -> int:
                     height=LOG_PANEL_HEIGHT_PX + 20,
                 )
 
-        # Detect tqdm-style progress lines (e.g. "  3%|▎         | 1/32 [...]")
-        # so consecutive updates overwrite each other in the log instead of
-        # piling up as separate lines, the way they would in a real terminal.
-        tqdm_line = re.compile(r"^\s*\d+%\|")
+        # Detect tqdm-style progress lines (e.g. "  3%|▎         | 1/32 [...]"
+        # or "Processing Filters:  25%|██▌      | 1/4 [...]") so consecutive
+        # updates overwrite each other in the log instead of piling up as
+        # separate lines, the way they would in a real terminal. The `%|`
+        # marker can appear after an optional `desc:` prefix, so we search
+        # anywhere in the line rather than anchoring to the start.
+        tqdm_line = re.compile(r"\d+%\|")
 
         assert process.stdout is not None
         for line in process.stdout:
             stripped = line.rstrip("\n")
-            if lines and tqdm_line.match(stripped) and tqdm_line.match(lines[-1]):
+            if lines and tqdm_line.search(stripped) and tqdm_line.search(lines[-1]):
                 lines[-1] = stripped
             else:
                 lines.append(stripped)

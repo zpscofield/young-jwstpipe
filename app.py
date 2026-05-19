@@ -363,6 +363,43 @@ def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
     return sort_filters_by_wavelength(filter_paths.keys())
 
 
+@st.cache_data(show_spinner=False)
+def _filters_in_uncal_dir(data_dir: str, dir_mtime: float, n_files: int) -> list[str]:
+    """Return filters found in *_uncal.fits primary headers, sorted by wavelength.
+
+    The dir_mtime and n_files args are cache-invalidation signals only — they
+    let Streamlit reuse the result until files are added, removed, or modified.
+    """
+    from astropy.io import fits  # local import: only paid when this helper runs
+
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+    filters: set[str] = set()
+    for fits_path in path.glob("*_uncal.fits"):
+        try:
+            hdr = fits.getheader(str(fits_path), ext=0)
+        except Exception:
+            continue
+        filt = hdr.get("FILTER")
+        if filt:
+            filters.add(str(filt))
+    return sort_filters_by_wavelength(filters)
+
+
+def _scan_uncal_filters(data_dir: str) -> list[str]:
+    """Cached uncal-header scan; returns [] if data_dir is empty/missing."""
+    if not data_dir:
+        return []
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+    n_files = sum(1 for _ in path.glob("*_uncal.fits"))
+    if n_files == 0:
+        return []
+    return _filters_in_uncal_dir(str(path), path.stat().st_mtime, n_files)
+
+
 def _get(config: dict, key: str, default):
     value = config.get(key)
     return value if value is not None else default
@@ -1083,13 +1120,15 @@ ci_obs_list = _scan_observations_with_i2d(ci_output_dir)
 saved_hues = dict(_get(current, "color_image_filter_hues", {}) or {})
 new_hues = dict(saved_hues)
 
-if not ci_obs_list:
-    st.info(
-        "Run the pipeline first to produce stage 3 i2d files, then come back here "
-        "to generate a color image."
-    )
-    selected_obs = None
-else:
+# Determine the filter list to render hue inputs for. Prefer stage-3 i2d
+# files when they exist (authoritative); otherwise fall back to reading
+# FILTER headers from the uncal files so the user can configure hues
+# before the pipeline runs.
+selected_obs: str | None = None
+filters_present: list[str] = []
+filters_source: str = ""  # one of "i2d", "uncal", or ""
+
+if ci_obs_list:
     if len(ci_obs_list) == 1:
         selected_obs = ci_obs_list[0]
         st.caption(f"Observation: `{selected_obs}`")
@@ -1099,47 +1138,63 @@ else:
             ci_obs_list,
             key="color_image_obs_choice",
         )
-
     filters_present = _filters_in_observation(ci_output_dir, selected_obs)
-    n_filters = len(filters_present)
+    filters_source = "i2d"
+else:
+    filters_present = _scan_uncal_filters(new_config.get("data_directory") or "")
+    if filters_present:
+        filters_source = "uncal"
 
-    if n_filters == 0:
-        st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
-    elif n_filters == 1:
-        st.info(
-            f"Only one filter ({filters_present[0]}) is available. "
-            "The per-filter stretched TIFF will still be saved; no combined color image."
-        )
-    elif n_filters == 2:
-        st.caption(
-            f"Two filters detected ({filters_present[0]} and {filters_present[1]}). "
-            "Combined image will use the luminance-preserving recipe: "
-            f"blue = {filters_present[0]}, red = {filters_present[1]}, green = mean."
-        )
-    else:
-        st.caption(
-            f"{n_filters} filters detected. Set a hue (0°–360°) for each — defaults "
-            "follow a wavelength ramp (240° = blue at the shortest wavelength, "
-            "0° = red at the longest)."
-        )
-        defaults = default_hues_for_filters(filters_present)
-        # Render hue inputs in up-to-3 columns.
-        cols = st.columns(min(3, n_filters))
-        for i, filt in enumerate(filters_present):
-            with cols[i % len(cols)]:
-                wl = FILTER_PIVOT_WAVELENGTHS_UM.get(filt)
-                label = f"{filt}" + (f" ({wl} µm)" if wl else "")
-                default_value = float(saved_hues.get(filt, defaults.get(filt, 120.0)))
-                new_hues[filt] = float(
-                    st.number_input(
-                        label,
-                        min_value=0.0,
-                        max_value=360.0,
-                        value=default_value,
-                        step=5.0,
-                        key=f"hue_{filt}",
-                    )
+n_filters = len(filters_present)
+
+if filters_source == "i2d" and n_filters == 0:
+    st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
+elif filters_source == "uncal":
+    st.caption(
+        f"{n_filters} filter(s) detected from uncal files: "
+        f"{', '.join(filters_present)}. Configure hues now — they'll be saved "
+        "to config and applied automatically at the end of the pipeline run."
+    )
+elif not filters_present:
+    st.info(
+        "Point `data_directory` at uncal files (or run the pipeline first) "
+        "to configure per-filter hues."
+    )
+
+if n_filters == 1:
+    st.info(
+        f"Only one filter ({filters_present[0]}) is available. "
+        "The per-filter stretched TIFF will still be saved; no combined color image."
+    )
+elif n_filters == 2:
+    st.caption(
+        f"Two filters detected ({filters_present[0]} and {filters_present[1]}). "
+        "Combined image will use the luminance-preserving recipe: "
+        f"blue = {filters_present[0]}, red = {filters_present[1]}, green = mean."
+    )
+elif n_filters >= 3:
+    st.caption(
+        f"Set a hue (0°–360°) for each filter — defaults follow a wavelength "
+        "ramp (240° = blue at the shortest wavelength, 0° = red at the longest)."
+    )
+    defaults = default_hues_for_filters(filters_present)
+    # Render hue inputs in up-to-3 columns.
+    cols = st.columns(min(3, n_filters))
+    for i, filt in enumerate(filters_present):
+        with cols[i % len(cols)]:
+            wl = FILTER_PIVOT_WAVELENGTHS_UM.get(filt)
+            label = f"{filt}" + (f" ({wl} µm)" if wl else "")
+            default_value = float(saved_hues.get(filt, defaults.get(filt, 120.0)))
+            new_hues[filt] = float(
+                st.number_input(
+                    label,
+                    min_value=0.0,
+                    max_value=360.0,
+                    value=default_value,
+                    step=5.0,
+                    key=f"hue_{filt}",
                 )
+            )
 
 new_config["color_image_filter_hues"] = new_hues
 

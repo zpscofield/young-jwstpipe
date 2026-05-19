@@ -848,7 +848,7 @@ elif data_source_mode == "MAST lookup by RA / Dec":
         )
 
     new_config["data_directory"] = _resolve_data_dir(coord_dest)
-    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 elif data_source_mode == "MAST lookup by program ID":
     col_p, col_d = st.columns([2, 3])
@@ -893,7 +893,7 @@ elif data_source_mode == "MAST lookup by program ID":
             st.session_state["resolved_data_directory"] = downloaded_path
 
     new_config["data_directory"] = _resolve_data_dir(prop_dest)
-    st.caption(f"📂 Pipeline will read uncal files from: `{new_config['data_directory']}`")
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 else:  # Use existing directory
     new_config["data_directory"] = st.text_input(
@@ -901,6 +901,7 @@ else:  # Use existing directory
         value=_get(current, "data_directory", "./data"),
         help="The pipeline searches this directory recursively for *_uncal.fits files.",
     )
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
 
 
 # 2. Output & grouping

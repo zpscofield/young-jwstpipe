@@ -1250,6 +1250,14 @@ elif n_filters >= 3:
         "ramp (240° = blue at the shortest wavelength, 0° = red at the longest)."
     )
     defaults = default_hues_for_filters(filters_present)
+
+    # If the Reset button was clicked on the previous run, the rerun lands
+    # here BEFORE any number_input widgets are instantiated — which is the
+    # only point at which Streamlit lets us seed their session state keys.
+    if st.session_state.pop("_pending_hue_reset", False):
+        for f in filters_present:
+            st.session_state[f"hue_{f}"] = float(defaults.get(f, 120.0))
+
     # Render hue inputs in up-to-3 columns.
     cols = st.columns(min(3, n_filters))
     for i, filt in enumerate(filters_present):
@@ -1270,7 +1278,9 @@ elif n_filters >= 3:
 
     # Reset to wavelength-ramp defaults. Saved hues from prior runs would
     # otherwise stick around via the widget's session state, which makes it
-    # awkward to re-baseline when testing a new pipeline version.
+    # awkward to re-baseline when testing a new pipeline version. Setting a
+    # pending-reset flag here and rerunning defers the session-state writes
+    # to the next run, before the widgets above are instantiated.
     reset_col, _reset_pad = st.columns([1, 4])
     with reset_col:
         if st.button(
@@ -1278,8 +1288,7 @@ elif n_filters >= 3:
             key="reset_hues_to_defaults",
             help="Restore each filter's hue to the wavelength ramp (shortest = 240°, longest = 0°).",
         ):
-            for f in filters_present:
-                st.session_state[f"hue_{f}"] = float(defaults.get(f, 120.0))
+            st.session_state["_pending_hue_reset"] = True
             st.rerun()
 
 new_config["color_image_filter_hues"] = new_hues

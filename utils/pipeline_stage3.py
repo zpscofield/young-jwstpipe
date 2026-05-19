@@ -13,8 +13,29 @@ import argparse
 import concurrent.futures
 import psutil
 import time
+from contextlib import contextmanager
 
 from log_utils import archive_existing_log
+
+
+@contextmanager
+def redirect_output_to_file(log_file):
+    """Temporarily redirect stdout and stderr to a log file at the FD level.
+
+    This catches output written directly to C-level stdout/stderr by stpipe
+    and CRDS, which the Python logging module cannot intercept.
+    """
+    log_fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        os.dup2(log_fd, 1)
+        os.dup2(log_fd, 2)
+        yield
+    finally:
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(log_fd)
 
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
@@ -98,12 +119,12 @@ def setup_filter_logger(filter_dir):
         for handler in logger.handlers:
             if isinstance(handler, logging.StreamHandler):
                 logger.removeHandler(handler)
-    return log_filter
+    return log_filter, log_file_path
 
 def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, extract_settings, config):
-    log_filter = setup_filter_logger(filter_dir)
+    log_filter, log_file_path = setup_filter_logger(filter_dir)
     try:
-        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config)
+        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=log_file_path)
         extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
@@ -248,7 +269,7 @@ def extract_resample_info(mosaic_img_path):
         }
     return resample_info
 
-def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None):
+def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None, log_file_path=None):
 
     output_dir = filter_dir + '/output_files'
 
@@ -342,7 +363,11 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
     asn_list = [os.path.join(filter_dir, file) for file in os.listdir(filter_dir) if file.endswith('asn.json')]
     asn = asn_list[0]
 
-    result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
+    if log_file_path:
+        with redirect_output_to_file(log_file_path):
+            result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
+    else:
+        result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Stage 1 of the JWST data reduction pipeline.')
@@ -383,20 +408,19 @@ if __name__ == "__main__":
     ref_cat = config.get("external_reference", None) or None
     if ref_cat is None:
         log.info('No reference catalog provided, no absolute astrometric fitting performed.')
-    log.info('Running stage 3 for the longest wavelength first...')
-    print('Running stage 3 for the longest wavelength first...')
+    longest_filter = sorted_filters[0]
+    log.info(f'Running stage 3 for the longest-wavelength filter ({longest_filter}) first...')
+    print(f'[Stage3] Longest-wavelength filter: {longest_filter}', flush=True)
 
-    log_long_filter = setup_filter_logger(sorted_filter_dirs[0])
-    stage3(sorted_filter_dirs[0], log_long_filter, target, filter_to_paths[sorted_filters[0]], reference_catalog=ref_cat, resample_params=None, config=config)
+    log_long_filter, long_log_path = setup_filter_logger(sorted_filter_dirs[0])
+    stage3(sorted_filter_dirs[0], log_long_filter, target, filter_to_paths[longest_filter], reference_catalog=ref_cat, resample_params=None, config=config, log_file_path=long_log_path)
     extract_data(sorted_filter_dirs[0], target, extract_settings, log_long_filter)
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
-    if use_multiprocessing == True:
-        print('Finished. Starting stage 3 processing for remaining filters with multiprocessing.')
-        log.info('Finished. Starting stage 3 processing for remaining filters with multiprocessing.')
-    else:
-        print('Finished. Starting stage 3 processing for remaining filters in series.')
-        log.info('Finished. Starting stage 3 processing for remaining filters in series.')
+    n_remaining = len(sorted_filter_dirs) - 1
+    mode = "multiprocessing" if use_multiprocessing else "series"
+    log.info(f'Finished. Starting stage 3 processing for {n_remaining} remaining filter(s) in {mode}.')
+    print(f'[Stage3] Processing {n_remaining} remaining filter(s) in {mode}...', flush=True)
 
     path_longest = sorted_filter_dirs[0] + '/output_files/'
     convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
@@ -410,8 +434,8 @@ if __name__ == "__main__":
         process_filters_parallel(sorted_filter_dirs[1:], filter_to_paths, target, long_cat, long_params, extract_settings, config=config)
 
     else:
-        for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stderr)):
-            log_filter = setup_filter_logger(dir)
+        for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stdout, desc="Processing Filters")):
+            log_filter, filter_log_path = setup_filter_logger(dir)
             filter_name = os.path.basename(dir)
-            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config)
+            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=filter_log_path)
             extract_data(dir, target, extract_settings, log_filter)

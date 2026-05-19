@@ -24,6 +24,7 @@ commits.
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import subprocess
 import sys
@@ -501,8 +502,10 @@ new_config = dict(current)
 # st.divider()
 # st.caption(f"Editing {CONFIG_PATH}")
 # Dark rounded pill so the caption stays legible over bright spots in the banner.
+# Negative top margin lifts it back onto the banner — the banner ends with a
+# `margin-bottom: -1.5rem` of its own, so we offset further to clear it.
 st.markdown(
-    f'<div style="text-align: center; margin: 0.25rem 0 0.75rem 0;">'
+    f'<div style="text-align: center; margin: -1rem 0 0.75rem 0;">'
     f'<span style="display: inline-block; font-size: 0.8rem; color: #e6e6e6; '
     f'background-color: rgba(0, 0, 0, 0.6); padding: 3px 12px; '
     f'border-radius: 12px;">Editing {CONFIG_PATH}</span>'
@@ -1312,7 +1315,36 @@ with ci_actions_mid:
 if generate_clicked and has_i2d:
     save_config(new_config)
     obs_dir_path = Path(ci_output_dir).expanduser() / selected_obs
-    with st.spinner(f"Generating color image for {selected_obs}…"):
+
+    # Reset the per-run log so successive clicks don't append to old runs.
+    st.session_state["color_image_gen_log"] = []
+    st.session_state["color_image_gen_state"] = "running"
+
+    with st.status(
+        f"Generating color image for {selected_obs}…", expanded=True
+    ) as gen_status:
+        gen_log_box = st.empty()
+
+        class _SessionLogHandler(logging.Handler):
+            def emit(self, record):
+                msg = self.format(record)
+                st.session_state["color_image_gen_log"].append(msg)
+                gen_log_box.code(
+                    "\n".join(st.session_state["color_image_gen_log"]),
+                    language=None,
+                )
+
+        gen_log = logging.getLogger("color_image_gen")
+        gen_log.setLevel(logging.INFO)
+        gen_log.propagate = False
+        # Clear handlers from any previous click so we don't duplicate lines.
+        for _h in list(gen_log.handlers):
+            gen_log.removeHandler(_h)
+        _handler = _SessionLogHandler()
+        _handler.setFormatter(logging.Formatter("%(message)s"))
+        gen_log.addHandler(_handler)
+
+        result = None
         try:
             result = make_color_image(
                 obs_dir=obs_dir_path,
@@ -1322,10 +1354,17 @@ if generate_clicked and has_i2d:
                 gamma=float(new_config["color_image_gamma"]),
                 filter_hues=new_hues,
                 subtract_sky_per_filter=bool(new_config["color_image_subtract_sky"]),
+                log=gen_log,
+            )
+            st.session_state["color_image_gen_state"] = "complete"
+            gen_status.update(
+                label="Color image generation finished.", state="complete"
             )
         except Exception as exc:
-            st.error(f"Color image generation failed: {exc}")
-            result = None
+            st.session_state["color_image_gen_state"] = "error"
+            gen_status.update(
+                label=f"Color image generation failed: {exc}", state="error"
+            )
 
     if result is not None:
         preview = result.get("preview")
@@ -1346,6 +1385,20 @@ if generate_clicked and has_i2d:
                         )
                     else:
                         st.code(f"{filt}: {path}", language=None)
+
+elif st.session_state.get("color_image_gen_log"):
+    # Replay the previous run's log so the user can still review it after
+    # interacting with other widgets (which causes Streamlit to rerun).
+    _last_state = st.session_state.get("color_image_gen_state", "complete")
+    if _last_state == "error":
+        _label, _st_state = "Last color image run — failed.", "error"
+    else:
+        _label, _st_state = "Last color image run — finished.", "complete"
+    with st.status(_label, expanded=False, state=_st_state):
+        st.code(
+            "\n".join(st.session_state["color_image_gen_log"]),
+            language=None,
+        )
 
 # Toggle-controlled preview render. Falls back to the canonical disk path
 # so previews written by the in-pipeline color step appear without needing

@@ -1295,7 +1295,19 @@ if selected_obs is not None and _filters_in_observation(ci_output_dir, selected_
                         else:
                             st.code(f"{filt}: {path}", language=None)
 
+    # Prefer the path set by the manual "Generate" button (fresh from this
+    # session); otherwise fall back to the canonical disk location so the
+    # preview written by the auto-run-at-end-of-pipeline step still shows up.
     preview_path = st.session_state.get(f"color_preview_{selected_obs}")
+    if not preview_path:
+        disk_preview = (
+            Path(ci_output_dir).expanduser()
+            / selected_obs
+            / "color"
+            / f"{selected_obs}_color_preview.png"
+        )
+        if disk_preview.exists():
+            preview_path = str(disk_preview)
     if preview_path and Path(preview_path).exists():
         st.image(
             preview_path,
@@ -1336,3 +1348,14 @@ if run_clicked:
     save_config(new_config)
     st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
     run_pipeline_streaming()
+    st.session_state["pipeline_just_ran"] = True
+
+# After any pipeline run, expose a manual refresh button below the log panel
+# so the user can review the streamed log first and then explicitly trigger
+# a rerun to re-render the Color Image section against the new outputs.
+# If no preview was produced, the Color Image section above just stays empty
+# — that's intentional, no error needed.
+if st.session_state.get("pipeline_just_ran"):
+    if st.button("Show color image preview", key="show_color_preview_after_run"):
+        st.session_state["pipeline_just_ran"] = False
+        st.rerun()

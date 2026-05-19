@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from glob import glob
 from pathlib import Path
 from typing import Iterable
@@ -34,6 +35,7 @@ from typing import Iterable
 import numpy as np
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
+from astropy.utils.exceptions import AstropyUserWarning
 from PIL import Image
 
 from log_utils import archive_existing_log
@@ -55,7 +57,13 @@ def estimate_sky_level(
     subtract to make sure every filter's true sky maps to the same
     'black' before the asinh stretch.
     """
-    _mean, median, _std = sigma_clipped_stats(data, sigma=sigma, maxiters=maxiters)
+    # sigma_clipped_stats prints an AstropyUserWarning each time it sees
+    # NaNs in the input (which is normal for stage-3 mosaics outside the
+    # detector footprint); the masking is already what we want.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", AstropyUserWarning)
+        warnings.simplefilter("ignore", RuntimeWarning)
+        _mean, median, _std = sigma_clipped_stats(data, sigma=sigma, maxiters=maxiters)
     return float(median)
 
 

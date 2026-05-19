@@ -1228,7 +1228,7 @@ elif n_filters == 2:
     )
 elif n_filters >= 3:
     st.caption(
-        f"Set a hue (0°–360°) for each filter — defaults follow a wavelength "
+        f"Set a hue (0°–240°) for each filter — defaults follow a wavelength "
         "ramp (240° = blue at the shortest wavelength, 0° = red at the longest)."
     )
     defaults = default_hues_for_filters(filters_present)
@@ -1243,7 +1243,7 @@ elif n_filters >= 3:
                 st.number_input(
                     label,
                     min_value=0.0,
-                    max_value=360.0,
+                    max_value=240.0,
                     value=default_value,
                     step=5.0,
                     key=f"hue_{filt}",

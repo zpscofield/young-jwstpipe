@@ -106,24 +106,38 @@ def hue_to_rgb(hue_deg: float) -> tuple[float, float, float]:
     return colorsys.hsv_to_rgb(hue / 360.0, 1.0, 1.0)
 
 
-def default_hues_for_filters(
-    filters_sorted: list[str],
-    wl_min_um: float = 0.6,
-    wl_max_um: float = 5.0,
-) -> dict[str, float]:
+def default_hues_for_filters(filters_sorted: list[str]) -> dict[str, float]:
     """Pre-populate per-filter hue defaults from the wavelength→hue ramp.
 
-    Bluest filter → 240°, reddest → 0°. The user can override any of
-    these from the Streamlit UI.
+    The shortest filter in the input list lands at 240° (pure blue) and the
+    longest at 0° (pure red), with intermediate filters linearly interpolated
+    by their pivot wavelength. Anchoring the endpoints to the actual filter
+    set means F090W is exactly blue when it's the bluest filter present,
+    regardless of whether F070W or F480M happens to exist in the wavelength
+    table. The user can override any value from the Streamlit UI.
     """
+    known = [
+        (name, FILTER_PIVOT_WAVELENGTHS_UM[name])
+        for name in filters_sorted
+        if name in FILTER_PIVOT_WAVELENGTHS_UM
+    ]
+    if not known:
+        return {name: 120.0 for name in filters_sorted}
+
+    wl_min = min(wl for _, wl in known)
+    wl_max = max(wl for _, wl in known)
+    span = wl_max - wl_min
+
     hues: dict[str, float] = {}
     for name in filters_sorted:
         wl = FILTER_PIVOT_WAVELENGTHS_UM.get(name)
         if wl is None:
-            hues[name] = 120.0  # green fallback for unknown filters
+            hues[name] = 120.0  # green fallback for filters not in the table
             continue
-        # Linear ramp 240° (blue) at wl_min → 0° (red) at wl_max.
-        hue = 240.0 * (1.0 - (wl - wl_min_um) / max(wl_max_um - wl_min_um, 1e-9))
+        if span <= 0:
+            hues[name] = 240.0  # single known wavelength → pure blue
+            continue
+        hue = 240.0 * (1.0 - (wl - wl_min) / span)
         hues[name] = float(np.clip(hue, 0.0, 240.0))
     return hues
 
@@ -187,10 +201,10 @@ def _save_preview_png(rgb_01: np.ndarray, path: Path, max_size: int = 1200) -> N
 # ---------------------------------------------------------------------------
 
 def _normalize_channel_to_unit(arr: np.ndarray) -> np.ndarray:
-    """Scale a 2-D array so its 99.5th percentile lands at 1.0, clipped."""
+    """Scale a 2-D array so its 99.99th percentile lands at 1.0, clipped."""
     if not np.any(np.isfinite(arr)):
         return np.zeros_like(arr)
-    top = float(np.nanquantile(arr, 0.995))
+    top = float(np.nanquantile(arr, 0.9999))
     if top <= 0:
         return np.clip(arr, 0.0, 1.0)
     return np.clip(arr / top, 0.0, 1.0)
@@ -275,7 +289,7 @@ def make_color_image(
         i2d_path = filter_paths[name]
         log.info(f"Stretching {name} from {i2d_path}")
         with fits.open(i2d_path) as hdul:
-            data = hdul[1].data.astype(np.float64)
+            data = np.flipud(hdul[1].data.astype(np.float64))
 
         if subtract_sky_per_filter:
             data, sky_level = subtract_sky(data)

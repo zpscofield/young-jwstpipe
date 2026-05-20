@@ -1196,114 +1196,6 @@ with st.expander("Stage 3 (Image3Pipeline) step overrides"):
 
 st.subheader("Calibration step settings")
 
-with st.expander("Stage 3 settings (user-determined)"):
-    st.info(
-        "Defaults are tested to work well, but these settings should be "
-        "determined by the user for their data."
-    )
-    _in_memory_note = (
-        "Speeds up processing when checked, but can cause the reduction to "
-        "fail if the image is too large for system memory, or if too many "
-        "parallel processes are used in stage 3."
-    )
-
-    st.markdown("**Resample**")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        new_config["pixel_scale"] = st.number_input(
-            "Pixel scale (arcsec)",
-            min_value=0.001,
-            max_value=1.0,
-            value=float(_get(current, "pixel_scale", 0.02)),
-            step=0.005,
-            format="%.4f",
-        )
-        new_config["pixfrac"] = st.number_input(
-            "pixfrac",
-            min_value=0.01,
-            max_value=1.0,
-            value=float(_get(current, "pixfrac", 0.75)),
-            step=0.05,
-            format="%.2f",
-        )
-    with col_b:
-        new_config["rotation"] = st.number_input(
-            "Rotation (degrees; 0 = North up)",
-            value=float(_get(current, "rotation", 0.0)),
-            step=1.0,
-            format="%.2f",
-        )
-        new_config["res_kernel"] = st.selectbox(
-            "Resample kernel",
-            ["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"],
-            index=["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"].index(
-                _get(current, "res_kernel", "square")
-            ),
-        )
-    new_config["resample_in_memory"] = st.checkbox(
-        "Resample in memory",
-        value=bool(_get(current, "resample_in_memory", True)),
-    )
-    st.caption(_in_memory_note)
-
-    st.markdown("**Outlier detection**")
-    new_config["outlier_in_memory"] = st.checkbox(
-        "Outlier detection in memory",
-        value=bool(_get(current, "outlier_in_memory", True)),
-    )
-    st.caption(_in_memory_note)
-
-    st.markdown("**Tweakreg**")
-    new_config["external_reference"] = st.text_input(
-        "External reference catalog",
-        value=_get(current, "external_reference", ""),
-        help=(
-            "Either a path to a CSV with RA,DEC columns, or a catalog name "
-            "the jwst pipeline knows about (e.g. GAIADR3). Type the name "
-            "plain, without quotes."
-        ),
-        placeholder="GAIADR3   or   /path/to/refcat.csv",
-    )
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        new_config["starfinder"] = st.selectbox(
-            "Starfinder",
-            ["segmentation", "iraf", "dao"],
-            index=["segmentation", "iraf", "dao"].index(
-                _get(current, "starfinder", "segmentation")
-            ),
-        )
-        new_config["snr_threshold"] = st.number_input(
-            "SNR threshold",
-            min_value=0.1,
-            max_value=100.0,
-            value=float(_get(current, "snr_threshold", 5.0)),
-            step=0.5,
-        )
-    with col_t2:
-        new_config["abs_fitgeometry"] = st.selectbox(
-            "abs_fitgeometry",
-            ["rshift", "shift", "rscale", "general"],
-            index=["rshift", "shift", "rscale", "general"].index(
-                _get(current, "abs_fitgeometry", "rshift")
-            ),
-        )
-        new_config["fitgeometry"] = st.selectbox(
-            "fitgeometry",
-            ["rshift", "shift", "rscale", "general"],
-            index=["rshift", "shift", "rscale", "general"].index(
-                _get(current, "fitgeometry", "rshift")
-            ),
-        )
-    st.markdown("**Skymatch**")
-    new_config["skymethod"] = st.selectbox(
-        "skymethod",
-        ["match", "globalmin", "localmin", "globalmin+match"],
-        index=["match", "globalmin", "localmin", "globalmin+match"].index(
-            _get(current, "skymethod", "match")
-        ),
-    )
-
 with st.expander("Advanced background subtraction options"):
     st.caption(
         "Tiered source masking runs 4 passes from bright (tier 1) to faint "
@@ -1633,8 +1525,118 @@ with st.expander("Extract i2d extensions"):
         new_config["extract_var_flat"] = st.checkbox("Extract VAR_FLAT", value=bool(_get(current, "extract_var_flat", False)))
 
 
-# 7. Color image
-st.header("7. Color image")
+# 7. Required mosaic creation settings
+st.header("7. Required mosaic creation settings")
+st.info(
+    "Defaults are tested to work well, but these settings should be reviewed "
+    "and determined by the user for their data."
+)
+_in_memory_note = (
+    "Speeds up processing when checked, but can cause the reduction to "
+    "fail if the image is too large for system memory, or if too many "
+    "parallel processes are used in stage 3."
+)
+
+st.markdown("**Resample**")
+col_a, col_b = st.columns(2)
+with col_a:
+    new_config["pixel_scale"] = st.number_input(
+        "Pixel scale (arcsec)",
+        min_value=0.001,
+        max_value=1.0,
+        value=float(_get(current, "pixel_scale", 0.02)),
+        step=0.005,
+        format="%.4f",
+    )
+    new_config["pixfrac"] = st.number_input(
+        "pixfrac",
+        min_value=0.01,
+        max_value=1.0,
+        value=float(_get(current, "pixfrac", 0.75)),
+        step=0.05,
+        format="%.2f",
+    )
+with col_b:
+    new_config["rotation"] = st.number_input(
+        "Rotation (degrees; 0 = North up)",
+        value=float(_get(current, "rotation", 0.0)),
+        step=1.0,
+        format="%.2f",
+    )
+    new_config["res_kernel"] = st.selectbox(
+        "Resample kernel",
+        ["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"],
+        index=["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"].index(
+            _get(current, "res_kernel", "square")
+        ),
+    )
+new_config["resample_in_memory"] = st.checkbox(
+    "Resample in memory",
+    value=bool(_get(current, "resample_in_memory", True)),
+)
+st.caption(_in_memory_note)
+
+st.markdown("**Outlier detection**")
+new_config["outlier_in_memory"] = st.checkbox(
+    "Outlier detection in memory",
+    value=bool(_get(current, "outlier_in_memory", True)),
+)
+st.caption(_in_memory_note)
+
+st.markdown("**Tweakreg**")
+new_config["external_reference"] = st.text_input(
+    "External reference catalog",
+    value=_get(current, "external_reference", ""),
+    help=(
+        "Either a path to a CSV with RA,DEC columns, or a catalog name "
+        "the jwst pipeline knows about (e.g. GAIADR3). Type the name "
+        "plain, without quotes."
+    ),
+    placeholder="GAIADR3   or   /path/to/refcat.csv",
+)
+col_t1, col_t2 = st.columns(2)
+with col_t1:
+    new_config["starfinder"] = st.selectbox(
+        "Starfinder",
+        ["segmentation", "iraf", "dao"],
+        index=["segmentation", "iraf", "dao"].index(
+            _get(current, "starfinder", "segmentation")
+        ),
+    )
+    new_config["snr_threshold"] = st.number_input(
+        "SNR threshold",
+        min_value=0.1,
+        max_value=100.0,
+        value=float(_get(current, "snr_threshold", 5.0)),
+        step=0.5,
+    )
+with col_t2:
+    new_config["abs_fitgeometry"] = st.selectbox(
+        "abs_fitgeometry",
+        ["rshift", "shift", "rscale", "general"],
+        index=["rshift", "shift", "rscale", "general"].index(
+            _get(current, "abs_fitgeometry", "rshift")
+        ),
+    )
+    new_config["fitgeometry"] = st.selectbox(
+        "fitgeometry",
+        ["rshift", "shift", "rscale", "general"],
+        index=["rshift", "shift", "rscale", "general"].index(
+            _get(current, "fitgeometry", "rshift")
+        ),
+    )
+st.markdown("**Skymatch**")
+new_config["skymethod"] = st.selectbox(
+    "skymethod",
+    ["match", "globalmin", "localmin", "globalmin+match"],
+    index=["match", "globalmin", "localmin", "globalmin+match"].index(
+        _get(current, "skymethod", "match")
+    ),
+)
+
+
+# 8. Color image
+st.header("8. Color image")
 st.caption(
     "Build a single color TIFF from your stage 3 i2d mosaics. Each filter is "
     "also saved as a stretched grayscale TIFF so you can edit them in Photoshop."

@@ -91,8 +91,9 @@ The page is organized top to bottom:
 3. **Calibration steps** — toggle which stages and optional calibration steps run, and set the WISP templates directory.
 4. **Performance** — parallel worker counts per stage, plus stage-3 multiprocessing options.
 5. **CRDS** — CRDS cache path and server URL.
-6. **Advanced settings** — guided per-step parameter overrides for Stages 1/2/3 (with a reference of every parameter for your installed `jwst` version), the curated Stage 3 settings (resample, outlier detection, tweakreg, skymatch), and the background / WISP / 1/f-noise step settings.
-7. **Color image** — per-filter hues and stretch settings; generate an RGB color image from the stage-3 mosaics.
+6. **Advanced settings** — guided per-step parameter overrides for Stages 1/2/3 (with a reference of every parameter for your installed `jwst` version), and the background / WISP / 1/f-noise step settings.
+7. **Required mosaic creation settings** — the stage-3 settings you should review for your data: resample (pixel scale, pixfrac, rotation, kernel), outlier detection, tweakreg (reference catalog and alignment), and skymatch.
+8. **Color image** — per-filter hues and stretch settings; generate an RGB color image from the stage-3 mosaics.
 
 Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
 

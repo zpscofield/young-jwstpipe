@@ -56,7 +56,10 @@ def process_file(args):
         redirect_output_to_log(log_file)
 
         # Run Image2Pipeline
-        steps = {'resample': {'skip': config['skip_resample']}}
+        # Stage 2 resampling is skipped by default (the mosaic is built in
+        # stage 3); the JWST default would otherwise run it. An explicit
+        # skip_resample: false in config still re-enables it.
+        steps = {'resample': {'skip': config.get('skip_resample', True)}}
         # Deep-merge any guided per-step overrides from the UI. Absent =>
         # unchanged behaviour.
         for _step, _params in (config.get('stage2_step_overrides') or {}).items():

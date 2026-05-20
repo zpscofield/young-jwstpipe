@@ -87,9 +87,11 @@ def process_file(args):
     """
     img, output_dir, log_file = args
     try:
+        # maximum_cores must default to "1": the step's own multiprocessing
+        # would otherwise contend with the outer per-file Pool wrapper.
         steps = {
-            "ramp_fit": {"maximum_cores": config.get("ramp_fit_cores")},
-            "jump": {"maximum_cores": config.get("jump_cores")},
+            "ramp_fit": {"maximum_cores": config.get("ramp_fit_cores") or "1"},
+            "jump": {"maximum_cores": config.get("jump_cores") or "1"},
         }
         # Deep-merge any guided per-step overrides from the UI on top of the
         # defaults above (so e.g. jump.rejection_threshold merges with the

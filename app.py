@@ -1120,7 +1120,7 @@ with st.expander("Advanced background subtraction options"):
     st.caption(
         "Tiered source masking runs 4 passes from bright (tier 1) to faint "
         "(tier 4) before estimating the sky. These defaults come from the "
-        "CEERS-derived algorithm. change them only if you know why."
+        "CEERS-derived algorithm. Change them only if you know why."
     )
     _tier_nsigma_def = list(_get(current, "bkg_tier_nsigma", [1.5, 1.5, 1.5, 1.5]))
     _tier_npix_def = list(_get(current, "bkg_tier_npixels", [15, 10, 3, 1]))
@@ -1391,9 +1391,18 @@ with st.expander("Advanced 1/f noise (cal) options"):
     st.caption(
         "Controls the source masking and baseline interpolation used by the "
         "cal-level 1/f noise correction. Defaults match the algorithm's "
-        "originals — change only if you know why. The per-amplifier column "
+        "originals. Change them only if you know why. The per-amplifier column "
         "splits (512-pixel boundaries) are fixed by the NIRCam detector layout "
         "and are not exposed."
+    )
+    new_config["cfnoise_whole_image"] = st.checkbox(
+        "Correct the whole image at once (skip per-channel 512-pixel split)",
+        value=bool(_get(current, "cfnoise_whole_image", False)),
+        help=(
+            "By default the correction auto-selects per-channel (512-px) or "
+            "whole-row medians based on source coverage. Enable this to always "
+            "use a single whole-row median across the full 2048-pixel width."
+        ),
     )
     _cf1, _cf2 = st.columns(2)
     with _cf1:

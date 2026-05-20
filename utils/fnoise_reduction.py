@@ -138,7 +138,12 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
     test3  = np.sum((frac3 >= 0.75) & valid3)
 
 
-    if test0 + test1 + test2 + test3 == 0:
+    # Optional add-on: force whole-image (non-split) correction regardless of
+    # the per-channel auto-detection above. When disabled (the default), the
+    # original auto-detection logic is preserved exactly.
+    if config.get('cfnoise_whole_image', False):
+        split = False
+    elif test0 + test1 + test2 + test3 == 0:
         split = True
     else:
         split = False

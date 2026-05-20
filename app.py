@@ -1142,6 +1142,8 @@ new_config["crds_server_url"] = st.text_input(
 # 6. Advanced settings
 st.header("6. Advanced settings")
 
+st.subheader("Pipeline stage parameter overrides")
+
 with st.expander("Stage 1 (Detector1Pipeline) step overrides"):
     st.caption(
         "Override any Detector1Pipeline step parameter for the installed jwst "
@@ -1166,15 +1168,20 @@ with st.expander("Stage 3 (Image3Pipeline) step overrides"):
     )
     render_step_overrides("stage3", "Image3Pipeline", current, new_config)
 
-with st.expander("Advanced stage 3 options"):
-    new_config["outlier_in_memory"] = st.checkbox(
-        "Outlier detection in memory",
-        value=bool(_get(current, "outlier_in_memory", True)),
+st.subheader("Calibration step settings")
+
+with st.expander("Stage 3 settings (user-determined)"):
+    st.info(
+        "Defaults are tested to work well, but these settings should be "
+        "determined by the user for their data."
     )
-    new_config["resample_in_memory"] = st.checkbox(
-        "Resample in memory",
-        value=bool(_get(current, "resample_in_memory", True)),
+    _in_memory_note = (
+        "Speeds up processing when checked, but can cause the reduction to "
+        "fail if the image is too large for system memory, or if too many "
+        "parallel processes are used in stage 3."
     )
+
+    st.markdown("**Resample**")
     col_a, col_b = st.columns(2)
     with col_a:
         new_config["pixel_scale"] = st.number_input(
@@ -1207,6 +1214,18 @@ with st.expander("Advanced stage 3 options"):
                 _get(current, "res_kernel", "square")
             ),
         )
+    new_config["resample_in_memory"] = st.checkbox(
+        "Resample in memory",
+        value=bool(_get(current, "resample_in_memory", True)),
+    )
+    st.caption(_in_memory_note)
+
+    st.markdown("**Outlier detection**")
+    new_config["outlier_in_memory"] = st.checkbox(
+        "Outlier detection in memory",
+        value=bool(_get(current, "outlier_in_memory", True)),
+    )
+    st.caption(_in_memory_note)
 
     st.markdown("**Tweakreg**")
     new_config["external_reference"] = st.text_input(
@@ -1572,6 +1591,8 @@ with st.expander("Advanced 1/f noise (cal) options"):
             "Source mask dilation size", min_value=1,
             value=int(_get(current, "cfnoise_mask_size", 11)), step=1,
         ))
+
+st.subheader("Output extensions")
 
 with st.expander("Extract i2d extensions"):
     col_e1, col_e2 = st.columns(2)

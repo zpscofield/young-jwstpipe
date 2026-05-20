@@ -87,13 +87,19 @@ def process_file(args):
     """
     img, output_dir, log_file = args
     try:
+        steps = {
+            "ramp_fit": {"maximum_cores": config.get("ramp_fit_cores")},
+            "jump": {"maximum_cores": config.get("jump_cores")},
+        }
+        # Deep-merge any guided per-step overrides from the UI on top of the
+        # defaults above (so e.g. jump.rejection_threshold merges with the
+        # jump.maximum_cores set here). Absent => unchanged behaviour.
+        for _step, _params in (config.get("stage1_step_overrides") or {}).items():
+            steps.setdefault(_step, {}).update(_params or {})
         with redirect_output_to_file(log_file):
             Detector1Pipeline.call(
                 img,
-                steps={
-                    "ramp_fit": {"maximum_cores": config.get("ramp_fit_cores")},
-                    "jump": {"maximum_cores": config.get("jump_cores")},
-                },
+                steps=steps,
                 output_dir=output_dir,
                 save_results=True,
             )

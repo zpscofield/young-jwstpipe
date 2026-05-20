@@ -51,6 +51,7 @@ from color_image import (
     sort_filters_by_wavelength,
 )
 from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
+from pipeline_introspect import jwst_version
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -459,6 +460,124 @@ def _expected_obs_with_i2d(config: dict, data_dir: str, output_dir: str) -> list
 def _get(config: dict, key: str, default):
     value = config.get(key)
     return value if value is not None else default
+
+
+@st.cache_data(show_spinner=False)
+def _introspect_stage_cached(stage: str, _version: str) -> dict:
+    """Cached per-stage step/parameter introspection (keyed by jwst version)."""
+    from pipeline_introspect import introspect_stage
+
+    return introspect_stage(stage)
+
+
+def _override_value_widget(stage_key, step, param, spec, existing):
+    """Render a value widget typed to the parameter's spec; return its value."""
+    wkey = f"{stage_key}_val_{step}_{param}"
+    ptype = spec.get("type")
+    default = spec.get("default")
+    start = existing if existing is not None else default
+    if ptype == "boolean":
+        return st.checkbox(
+            "Value", value=bool(start) if start is not None else False, key=wkey
+        )
+    if ptype == "option" and spec.get("options"):
+        opts = list(spec["options"])
+        if start is not None and start not in opts:
+            opts = [start] + opts
+        return st.selectbox(
+            "Value", opts, index=opts.index(start) if start in opts else 0, key=wkey
+        )
+    if ptype == "float":
+        return float(st.number_input(
+            "Value", value=float(start) if start is not None else 0.0, key=wkey
+        ))
+    if ptype in ("integer", "int"):
+        return int(st.number_input(
+            "Value", value=int(start) if start is not None else 0, step=1, key=wkey
+        ))
+    # string / list / unknown types: free text (only place the user types)
+    return st.text_input(
+        "Value", value="" if start is None else str(start), key=wkey
+    )
+
+
+def render_step_overrides(stage_key: str, pipeline_label: str, current: dict, new_config: dict):
+    """Guided per-step parameter overrides for a JWST pipeline stage.
+
+    Renders step/parameter dropdowns (from runtime introspection), a typed
+    value widget, an Add button, the list of active overrides with remove
+    buttons, and a read-only parameter reference. Writes the resulting nested
+    dict to new_config[f"{stage_key}_step_overrides"].
+    """
+    cfg_key = f"{stage_key}_step_overrides"
+    steps = _introspect_stage_cached(stage_key, jwst_version())
+    if not steps:
+        st.info(
+            f"Could not introspect {pipeline_label} in this environment, so "
+            "guided overrides are unavailable here. Any existing overrides in "
+            "config.yaml are preserved."
+        )
+        new_config[cfg_key] = dict(_get(current, cfg_key, {}) or {})
+        return
+
+    ss_key = f"_ovr_{stage_key}"
+    if ss_key not in st.session_state:
+        saved = _get(current, cfg_key, {}) or {}
+        st.session_state[ss_key] = {s: dict(p) for s, p in saved.items()}
+    overrides = st.session_state[ss_key]
+
+    step_names = sorted(steps.keys())
+    c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+    with c1:
+        sel_step = st.selectbox("Step", step_names, key=f"{stage_key}_sel_step")
+    with c2:
+        param_names = sorted(steps[sel_step].keys())
+        sel_param = st.selectbox("Parameter", param_names, key=f"{stage_key}_sel_param")
+    spec = steps[sel_step][sel_param]
+    existing = overrides.get(sel_step, {}).get(sel_param)
+    with c3:
+        val = _override_value_widget(stage_key, sel_step, sel_param, spec, existing)
+    with c4:
+        st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
+        if st.button("Add / update", key=f"{stage_key}_add_override"):
+            overrides.setdefault(sel_step, {})[sel_param] = val
+            st.rerun()
+
+    desc = spec.get("desc") or "(no description)"
+    st.caption(
+        f"**{sel_step}.{sel_param}** ({spec.get('type')}) — {desc}  ·  "
+        f"default: `{spec.get('default')}`"
+    )
+
+    if overrides:
+        st.markdown("**Active overrides**")
+        for s in sorted(overrides.keys()):
+            for p in sorted(overrides[s].keys()):
+                oc1, oc2 = st.columns([6, 1])
+                oc1.code(f"{s} · {p} = {overrides[s][p]}", language=None)
+                if oc2.button("✕", key=f"{stage_key}_rm_{s}_{p}"):
+                    del overrides[s][p]
+                    if not overrides[s]:
+                        del overrides[s]
+                    st.rerun()
+    else:
+        st.caption("No overrides set — every step uses the pipeline default.")
+
+    with st.expander(f"{pipeline_label} parameter reference (jwst {jwst_version()})"):
+        rows = []
+        for s in sorted(steps.keys()):
+            for p in sorted(steps[s].keys()):
+                info = steps[s][p]
+                rows.append({
+                    "Step": s,
+                    "Parameter": p,
+                    "Type": str(info.get("type")),
+                    "Default": "" if info.get("default") is None else str(info.get("default")),
+                    "Description": info.get("desc") or "",
+                })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    new_config[cfg_key] = {s: dict(p) for s, p in overrides.items()}
 
 
 st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
@@ -1022,6 +1141,14 @@ new_config["crds_server_url"] = st.text_input(
 
 # 6. Advanced settings
 st.header("6. Advanced settings")
+
+with st.expander("Stage 1 (Detector1Pipeline) step overrides"):
+    st.caption(
+        "Override any Detector1Pipeline step parameter for the installed jwst "
+        "version. Pick a step and parameter, set a value, and click Add. "
+        "Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage1", "Detector1Pipeline", current, new_config)
 
 with st.expander("Advanced stage 3 options"):
     new_config["outlier_in_memory"] = st.checkbox(

@@ -1241,6 +1241,152 @@ with st.expander("Advanced background subtraction options"):
         default=_saved_dq_flags,
     )
 
+with st.expander("Advanced WISP subtraction options"):
+    st.caption(
+        "These mirror the wisp-subtraction algorithm's own defaults and only "
+        "affect the wisp-impacted detectors (NRCA3/4, NRCB3/4). Change them "
+        "only if you know why."
+    )
+
+    st.markdown("**Source segmentation**")
+    _ws1, _ws2 = st.columns(2)
+    with _ws1:
+        new_config["wisp_create_segmap"] = st.checkbox(
+            "Create source segmentation map",
+            value=bool(_get(current, "wisp_create_segmap", True)),
+            help="Detect sources so they can be excluded when scaling the wisp template.",
+        )
+        new_config["wisp_seg_from_lw"] = st.checkbox(
+            "Build segmap from long-wavelength image",
+            value=bool(_get(current, "wisp_seg_from_lw", True)),
+        )
+        new_config["wisp_save_segmap"] = st.checkbox(
+            "Save segmentation map",
+            value=bool(_get(current, "wisp_save_segmap", False)),
+        )
+    with _ws2:
+        new_config["wisp_sigma"] = st.number_input(
+            "Detection sigma", min_value=0.0,
+            value=float(_get(current, "wisp_sigma", 0.8)), step=0.1,
+        )
+        new_config["wisp_npixels"] = int(st.number_input(
+            "Detection min pixels", min_value=1,
+            value=int(_get(current, "wisp_npixels", 10)), step=1,
+        ))
+        new_config["wisp_dilate_segmap"] = int(st.number_input(
+            "Segmap dilation (pixels)", min_value=0,
+            value=int(_get(current, "wisp_dilate_segmap", 5)), step=1,
+        ))
+
+    st.markdown("**Template scaling**")
+    new_config["wisp_scale_wisp"] = st.checkbox(
+        "Scale the wisp template before subtracting",
+        value=bool(_get(current, "wisp_scale_wisp", True)),
+    )
+    _wsc1, _wsc2 = st.columns(2)
+    with _wsc1:
+        _scale_method_opts = ["mad", "median"]
+        _saved_scale_method = _get(current, "wisp_scale_method", "mad")
+        if _saved_scale_method not in _scale_method_opts:
+            _scale_method_opts.append(_saved_scale_method)
+        new_config["wisp_scale_method"] = st.selectbox(
+            "Scale method", _scale_method_opts,
+            index=_scale_method_opts.index(_saved_scale_method),
+        )
+        new_config["wisp_poly_degree"] = int(st.number_input(
+            "Residual polynomial degree", min_value=0,
+            value=int(_get(current, "wisp_poly_degree", 5)), step=1,
+        ))
+    with _wsc2:
+        new_config["wisp_factor_min"] = st.number_input(
+            "Scale factor min",
+            value=float(_get(current, "wisp_factor_min", 0.0)), step=0.1,
+        )
+        new_config["wisp_factor_max"] = st.number_input(
+            "Scale factor max",
+            value=float(_get(current, "wisp_factor_max", 2.0)), step=0.1,
+        )
+        new_config["wisp_factor_step"] = st.number_input(
+            "Scale factor step",
+            value=float(_get(current, "wisp_factor_step", 0.01)),
+            step=0.01, format="%.3f",
+        )
+
+    st.markdown("**Template smoothing**")
+    _wsm1, _wsm2 = st.columns(2)
+    with _wsm1:
+        new_config["wisp_gauss_smooth_wisp"] = st.checkbox(
+            "Gaussian-smooth the wisp template",
+            value=bool(_get(current, "wisp_gauss_smooth_wisp", False)),
+        )
+    with _wsm2:
+        new_config["wisp_gauss_stddev"] = st.number_input(
+            "Gaussian smoothing stddev", min_value=0.0,
+            value=float(_get(current, "wisp_gauss_stddev", 3.0)), step=0.5,
+        )
+
+    st.markdown("**Subtraction and residual correction**")
+    _wsub1, _wsub2 = st.columns(2)
+    with _wsub1:
+        new_config["wisp_sub_wisp"] = st.checkbox(
+            "Subtract the wisp template",
+            value=bool(_get(current, "wisp_sub_wisp", True)),
+        )
+        new_config["wisp_correct_rows"] = st.checkbox(
+            "Correct row (1/f) residuals",
+            value=bool(_get(current, "wisp_correct_rows", True)),
+        )
+        new_config["wisp_correct_cols"] = st.checkbox(
+            "Correct column (odd/even) residuals",
+            value=bool(_get(current, "wisp_correct_cols", False)),
+        )
+    with _wsub2:
+        new_config["wisp_dq_val"] = int(st.number_input(
+            "DQ flag value for flagged wisp pixels", min_value=0,
+            value=int(_get(current, "wisp_dq_val", 1)), step=1,
+            help="1 = DO_NOT_USE. Only used when a flag threshold is set below.",
+        ))
+        _use_min_wisp = st.checkbox(
+            "Apply a minimum wisp value",
+            value=_get(current, "wisp_min_wisp", None) is not None,
+        )
+        if _use_min_wisp:
+            new_config["wisp_min_wisp"] = st.number_input(
+                "Minimum wisp value",
+                value=float(_get(current, "wisp_min_wisp", 0.0) or 0.0), step=0.1,
+            )
+        else:
+            new_config["wisp_min_wisp"] = None
+        _use_flag_thresh = st.checkbox(
+            "Flag wisp pixels above a threshold",
+            value=_get(current, "wisp_flag_wisp_thresh", None) is not None,
+        )
+        if _use_flag_thresh:
+            new_config["wisp_flag_wisp_thresh"] = st.number_input(
+                "Flag threshold",
+                value=float(_get(current, "wisp_flag_wisp_thresh", 0.0) or 0.0), step=0.1,
+            )
+        else:
+            new_config["wisp_flag_wisp_thresh"] = None
+
+    st.markdown("**Diagnostics**")
+    _wd1, _wd2, _wd3 = st.columns(3)
+    with _wd1:
+        new_config["wisp_save_model"] = st.checkbox(
+            "Save wisp model",
+            value=bool(_get(current, "wisp_save_model", True)),
+        )
+    with _wd2:
+        new_config["wisp_plot"] = st.checkbox(
+            "Save diagnostic plot",
+            value=bool(_get(current, "wisp_plot", True)),
+        )
+    with _wd3:
+        new_config["wisp_show_plot"] = st.checkbox(
+            "Show plot (notebook only)",
+            value=bool(_get(current, "wisp_show_plot", False)),
+        )
+
 with st.expander("Extract i2d extensions"):
     col_e1, col_e2 = st.columns(2)
     with col_e1:

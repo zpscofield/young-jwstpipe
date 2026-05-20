@@ -1158,6 +1158,14 @@ with st.expander("Stage 2 (Image2Pipeline) step overrides"):
     )
     render_step_overrides("stage2", "Image2Pipeline", current, new_config)
 
+with st.expander("Stage 3 (Image3Pipeline) step overrides"):
+    st.caption(
+        "Override any Image3Pipeline step parameter for the installed jwst "
+        "version. These merge on top of the curated tweakreg/skymatch/resample "
+        "settings below. Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage3", "Image3Pipeline", current, new_config)
+
 with st.expander("Advanced stage 3 options"):
     new_config["outlier_in_memory"] = st.checkbox(
         "Outlier detection in memory",

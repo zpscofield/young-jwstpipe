@@ -349,6 +349,11 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
 
     step_config = {**tweakreg_config, **resample_config, **outlier_config, **skymatch_config, **source_cat_config}
 
+    # Deep-merge any guided per-step overrides from the UI on top of the
+    # curated stage-3 config above. Absent => unchanged behaviour.
+    for _step, _params in (config.get('stage3_step_overrides') or {}).items():
+        step_config.setdefault(_step, {}).update(_params or {})
+
     filter = os.path.basename(filter_dir)
     if config.get('combine_observations') == True:
         program = "00000"

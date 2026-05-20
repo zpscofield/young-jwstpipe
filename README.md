@@ -8,6 +8,8 @@ A streamlined implementation of the James Webb Space Telescope (JWST) calibratio
 
 **[Hyungjin Joo](https://github.com/Hyungjin-Joo)**
 
+**[Kyle Finner](https://github.com/kfinner)**
+
 ## What this JWST calibration pipeline implementation does
 
 - Searches MAST and downloads uncalibrated JWST NIRCam data (`_uncal.fits`) directly from the interface — by target name, RA/Dec, or program ID — or uses a directory of `_uncal.fits` files you already have.

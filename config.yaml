@@ -7,10 +7,7 @@ combine_observations: true
 custom_name: A68_all_test
 group_by_directory: false
 stage1_nproc: 75
-ramp_fit_cores: '1'
-jump_cores: '1'
 stage2_nproc: 75
-skip_resample: true
 wisp_directory: /Volumes/YOUNG6/kyle_pipeline/wisp-templates/version4
 wisp_nproc: 75
 plot_sky: false

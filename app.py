@@ -501,6 +501,26 @@ def _override_value_widget(stage_key, step, param, spec, existing):
     )
 
 
+# Notes shown when the user selects a parameter whose YOUNG-pipeline default
+# intentionally differs from (or pins) the JWST behaviour.
+_OVERRIDE_NOTES = {
+    ("stage2", "resample", "skip"): (
+        "Resample is skipped by default in stage 2 to save time — the mosaic "
+        "is built in stage 3. (The JWST default is to run it.)"
+    ),
+    ("stage1", "ramp_fit", "maximum_cores"): (
+        "maximum_cores is set to 1 by default so this step's own "
+        "multiprocessing does not interfere with the per-file multiprocessing "
+        "wrapper used for the whole stage."
+    ),
+    ("stage1", "jump", "maximum_cores"): (
+        "maximum_cores is set to 1 by default so this step's own "
+        "multiprocessing does not interfere with the per-file multiprocessing "
+        "wrapper used for the whole stage."
+    ),
+}
+
+
 def render_step_overrides(stage_key: str, pipeline_label: str, current: dict, new_config: dict):
     """Guided per-step parameter overrides for a JWST pipeline stage.
 
@@ -548,6 +568,9 @@ def render_step_overrides(stage_key: str, pipeline_label: str, current: dict, ne
         f"**{sel_step}.{sel_param}** ({spec.get('type')}) — {desc}  ·  "
         f"default: `{spec.get('default')}`"
     )
+    _note = _OVERRIDE_NOTES.get((stage_key, sel_step, sel_param))
+    if _note:
+        st.info(_note)
 
     if overrides:
         st.markdown("**Active overrides**")

@@ -15,8 +15,7 @@ A streamlined implementation of the James Webb Space Telescope (JWST) calibratio
 - Executes Stages 1, 2, and 3 of the default JWST calibration pipeline, with added calibration steps:
     - **1/f noise correction** — a gradient-based technique that estimates the correlated 1/f striping from the image derivatives and removes it from the cal-level images. Source masking protects bright, extended emission, and estimates can be made per amplifier (512-pixel sections) or across the whole image, which improves performance in cluster fields.
     - **Wisp correction** (modified version of Ben Sunnquist's wisp correction algorithm, JWST documentation version 4).
-    - **Background subtraction** (modified version of Henry C. Ferguson's tiered-source-masking background subtraction).
-    - The background subtraction code is courtesy of the [*CEERS team*](https://github.com/ceers/ceers-nircam).
+    - **Background subtraction** (modified version of Henry C. Ferguson's tiered-source-masking background subtraction). The background subtraction code is courtesy of the [*CEERS team*](https://github.com/ceers/ceers-nircam).
 - Speeds up execution with parallel processing (Python multiprocessing) across exposures and filters; worker counts are configurable per stage.
 - Organizes calibrated exposures by filter and uses the source catalog from the longest-wavelength filter for astrometric alignment.
     - The longest-wavelength filter can also be matched to an external catalog (e.g. `GAIADR3`). If no external catalog is provided, it is not matched to any catalog.

@@ -292,7 +292,7 @@ run_pipeline() {
             --min-level "${COLOR_MIN_LEVEL:-0.001}" \
             --max-quantile "${COLOR_MAX_QUANTILE:-0.99999}" \
             --gamma "${COLOR_GAMMA:-2.2}" \
-            --filter-hues "${COLOR_HUES:-{}}" \
+            --filter-hues "${COLOR_HUES:-\{\}}" \
             $SKY_FLAG
         echo ""
     fi

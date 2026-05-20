@@ -1,23 +1,23 @@
 crds_path: /home/zpscofield/crds_cache
 crds_server_url: https://jwst-crds.stsci.edu
 pipeline_directory: .
-data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/A209data_f444w
+data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/A68_all_data
 output_directory: .
 combine_observations: true
-custom_name: Combined_Observation
+custom_name: A68_all_test
 group_by_directory: false
-stage1_nproc: 8
+stage1_nproc: 75
 ramp_fit_cores: '1'
 jump_cores: '1'
-stage2_nproc: 8
+stage2_nproc: 75
 skip_resample: true
 wisp_directory: /Volumes/YOUNG6/kyle_pipeline/wisp-templates/version4
-wisp_nproc: 8
+wisp_nproc: 75
 plot_sky: false
-cfnoise_nproc: 8
-bkg_nproc: 8
-stage3_use_multiprocessing: false
-min_processes: 8
+cfnoise_nproc: 75
+bkg_nproc: 75
+stage3_use_multiprocessing: true
+min_processes: 3
 outlier_in_memory: true
 pixel_scale: 0.02
 pixfrac: 0.75
@@ -37,10 +37,29 @@ extract_wht: true
 extract_var_poisson: false
 extract_var_rnoise: false
 extract_var_flat: false
-skip_steps: []
-color_image_enabled: false
+skip_steps:
+- download_uncal_references
+- stage1
+- download_rate_references
+- stage2
+- wisp_subtraction
+- cal_fnoise_reduction
+- background_subtraction
+- download_cal_references
+- stage3
+color_image_enabled: true
 color_image_min_level: 0.001
-color_image_max_quantile: 0.99999
+color_image_max_quantile: 0.9999
 color_image_gamma: 2.2
 color_image_subtract_sky: true
-color_image_filter_hues: {}
+color_image_filter_hues:
+  F090W: 240.0
+  F200W: 164.57142857142858
+  F277W: 111.08571428571432
+  F356W: 56.91428571428573
+  F115W: 222.85714285714286
+  F150W: 198.85714285714286
+  F210M: 157.71428571428572
+  F300M: 96.0
+  F410M: 21.942857142857164
+  F444W: 0.0

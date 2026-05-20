@@ -82,6 +82,11 @@ def setup_logger(output_dir):
         log_file.write("\n------------------\n")
         log_file.write("Stage 3 Processing\n")
         log_file.write("------------------\n\n")
+        log_file.write(
+            "Detailed Stage 3 output (CRDS, stpipe, per-step processing) is "
+            "written to the per-filter logs named 'stage3_<FILTER>.log' inside "
+            "each filter's output directory.\n\n"
+        )
 
     return log, log_file_path
 

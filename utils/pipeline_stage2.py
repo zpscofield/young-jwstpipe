@@ -56,10 +56,15 @@ def process_file(args):
         redirect_output_to_log(log_file)
 
         # Run Image2Pipeline
+        steps = {'resample': {'skip': config['skip_resample']}}
+        # Deep-merge any guided per-step overrides from the UI. Absent =>
+        # unchanged behaviour.
+        for _step, _params in (config.get('stage2_step_overrides') or {}).items():
+            steps.setdefault(_step, {}).update(_params or {})
         Image2Pipeline.call(
-            img, 
-            steps={'resample': {'skip': config['skip_resample']}}, 
-            output_dir=output_dir, 
+            img,
+            steps=steps,
+            output_dir=output_dir,
             save_results=True
         )
         print(f"Successfully processed {img}")

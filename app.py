@@ -575,7 +575,7 @@ def render_step_overrides(stage_key: str, pipeline_label: str, current: dict, ne
                     "Default": "" if info.get("default") is None else str(info.get("default")),
                     "Description": info.get("desc") or "",
                 })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
     new_config[cfg_key] = {s: dict(p) for s, p in overrides.items()}
 
@@ -764,7 +764,7 @@ def _render_aladin(
             "↻ Reload sky view",
             key=f"{session_key}_reload",
             help="Force the viewer to re-fetch and re-initialize.",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[f"{session_key}_retry"] = retry_token + 1
             st.rerun()
@@ -1149,6 +1149,14 @@ with st.expander("Stage 1 (Detector1Pipeline) step overrides"):
         "Anything you don't set keeps the pipeline default."
     )
     render_step_overrides("stage1", "Detector1Pipeline", current, new_config)
+
+with st.expander("Stage 2 (Image2Pipeline) step overrides"):
+    st.caption(
+        "Override any Image2Pipeline step parameter for the installed jwst "
+        "version. Pick a step and parameter, set a value, and click Add. "
+        "Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage2", "Image2Pipeline", current, new_config)
 
 with st.expander("Advanced stage 3 options"):
     new_config["outlier_in_memory"] = st.checkbox(

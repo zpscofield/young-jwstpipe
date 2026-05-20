@@ -994,7 +994,8 @@ for i, (key, label) in enumerate(nproc_fields):
             step=1,
         )
 
-with st.expander("Advanced stage 3 options"):
+perf_left, _perf_right = st.columns(2)
+with perf_left:
     new_config["stage3_use_multiprocessing"] = st.checkbox(
         "Use multiprocessing across filters in stage 3",
         value=bool(_get(current, "stage3_use_multiprocessing", True)),
@@ -1005,6 +1006,24 @@ with st.expander("Advanced stage 3 options"):
         max_value=32,
         value=int(_get(current, "min_processes", 8)),
     )
+
+
+# 5. CRDS
+st.header("5. CRDS")
+new_config["crds_path"] = st.text_input(
+    "CRDS cache path",
+    value=_get(current, "crds_path", "~/crds_cache"),
+)
+new_config["crds_server_url"] = st.text_input(
+    "CRDS server URL",
+    value=_get(current, "crds_server_url", "https://jwst-crds.stsci.edu"),
+)
+
+
+# 6. Advanced settings
+st.header("6. Advanced settings")
+
+with st.expander("Advanced stage 3 options"):
     new_config["outlier_in_memory"] = st.checkbox(
         "Outlier detection in memory",
         value=bool(_get(current, "outlier_in_memory", True)),
@@ -1046,7 +1065,7 @@ with st.expander("Advanced stage 3 options"):
             ),
         )
 
-with st.expander("Tweakreg and skymatch"):
+    st.markdown("**Tweakreg**")
     new_config["external_reference"] = st.text_input(
         "External reference catalog",
         value=_get(current, "external_reference", ""),
@@ -1088,6 +1107,7 @@ with st.expander("Tweakreg and skymatch"):
                 _get(current, "fitgeometry", "rshift")
             ),
         )
+    st.markdown("**Skymatch**")
     new_config["skymethod"] = st.selectbox(
         "skymethod",
         ["match", "globalmin", "localmin", "globalmin+match"],
@@ -1234,20 +1254,8 @@ with st.expander("Extract i2d extensions"):
         new_config["extract_var_flat"] = st.checkbox("Extract VAR_FLAT", value=bool(_get(current, "extract_var_flat", False)))
 
 
-# 5. CRDS
-st.header("5. CRDS")
-new_config["crds_path"] = st.text_input(
-    "CRDS cache path",
-    value=_get(current, "crds_path", "~/crds_cache"),
-)
-new_config["crds_server_url"] = st.text_input(
-    "CRDS server URL",
-    value=_get(current, "crds_server_url", "https://jwst-crds.stsci.edu"),
-)
-
-
-# 6. Color image
-st.header("6. Color image")
+# 7. Color image
+st.header("7. Color image")
 st.caption(
     "Build a single color TIFF from your stage 3 i2d mosaics. Each filter is "
     "also saved as a stretched grayscale TIFF so you can edit them in Photoshop."

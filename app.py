@@ -477,6 +477,9 @@ def _override_value_widget(stage_key, step, param, spec, existing):
     default = spec.get("default")
     start = existing if existing is not None else default
     if ptype == "boolean":
+        # Pad so the checkbox lines up with the labelled dropdowns/inputs
+        # beside it instead of floating up to the top of the row.
+        st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
         return st.checkbox(
             "Value", value=bool(start) if start is not None else False, key=wkey
         )

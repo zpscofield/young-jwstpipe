@@ -11,8 +11,6 @@ import logging
 import sys
 import argparse
 import concurrent.futures
-import psutil
-import time
 from contextlib import contextmanager
 
 from log_utils import archive_existing_log

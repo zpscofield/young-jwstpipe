@@ -35,8 +35,8 @@ from astropy.convolution import (
     convolve, convolve_fft, Box2DKernel, Tophat2DKernel,
     Ring2DKernel, Gaussian2DKernel)
 from scipy.ndimage import median_filter
-from astropy.wcs import WCS, FITSFixedWarning
-from astropy.utils.exceptions import AstropyUserWarning
+from astropy.wcs import WCS
+from astropy.utils.exceptions import AstropyWarning
 import warnings
 import yaml
 import os
@@ -329,25 +329,23 @@ class SubtractBackground:
         outfile = f"{prefix}_{self.suffix}.fits"
         # outpath = path.join(datadir,outfile)
         hdu = fits.open(fitsfile)
-        # SCI headers carry SIP distortion terms and MJD-only date keys;
-        # astropy.wcs auto-fixes / drops them and emits noisy per-file
-        # warnings that flood the log. The basic WCS is all we need for
-        # the BKGSUB / TIERMASK extensions, so silence them here.
+        # SCI headers carry SIP distortion terms and MJD-only date keys.
+        # astropy.wcs warns when it drops the SIP terms both on WCS
+        # construction and again on to_header(); the basic WCS is all we need
+        # for the BKGSUB / TIERMASK extensions, so silence astropy warnings
+        # across the whole write block.
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore', FITSFixedWarning)
-            warnings.simplefilter('ignore', AstropyUserWarning)
+            warnings.simplefilter('ignore', AstropyWarning)
             wcs = WCS(hdu['SCI'].header)
-        # Replace or append the background-subtracted image
-        # Replace
-        if self.replace_sci:
-            hdu['SCI'].data = bkgd_subtracted
-        # Append 
-        else:
-            newhdu = fits.ImageHDU(bkgd_subtracted,header=wcs.to_header(),name='BKGSUB')
+            # Replace or append the background-subtracted image
+            if self.replace_sci:
+                hdu['SCI'].data = bkgd_subtracted
+            else:
+                newhdu = fits.ImageHDU(bkgd_subtracted, header=wcs.to_header(), name='BKGSUB')
+                hdu.append(newhdu)
+            # Append an extension with the bitmask from the tiers of source rejection
+            newhdu = fits.ImageHDU(bitmask, header=wcs.to_header(), name='TIERMASK')
             hdu.append(newhdu)
-        # Append an extension with the bitmask from the tiers of source rejection
-        newhdu = fits.ImageHDU(bitmask,header=wcs.to_header(),name='TIERMASK')
-        hdu.append(newhdu)
         # Write out the new FITS file
         hdu.writeto(outfile,overwrite=True)
         self.log.info(f"Writing out {outfile}")

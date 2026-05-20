@@ -52,6 +52,7 @@ from color_image import (
 )
 from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
 from pipeline_introspect import jwst_version
+from config_layout import serialize_config
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -206,7 +207,7 @@ def save_config(config: dict) -> None:
         if field in expanded:
             expanded[field] = _expand_path_str(expanded[field])
     with open(CONFIG_PATH, "w") as f:
-        yaml.safe_dump(expanded, f, sort_keys=False, default_flow_style=False)
+        f.write(serialize_config(expanded))
 
 
 def validate_config(config: dict) -> tuple[list[str], list[str]]:

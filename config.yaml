@@ -1,32 +1,126 @@
-crds_path: /home/zpscofield/crds_cache
+# YOUNG JWST Pipeline configuration
+# Edit values below, or configure everything from the UI (./start.sh).
+# Section headers are regenerated automatically when the file is saved.
+
+# --- CRDS ---
+crds_path: /path/to/crds_cache
 crds_server_url: https://jwst-crds.stsci.edu
+
+# --- Paths ---
 pipeline_directory: .
-data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/A68_all_data
+data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/data
 output_directory: .
+
+# --- Output and grouping ---
 combine_observations: true
-custom_name: A68_all_test
+custom_name: Custom_Observation
 group_by_directory: false
-stage1_nproc: 75
-stage2_nproc: 75
-wisp_directory: /Volumes/YOUNG6/kyle_pipeline/wisp-templates/version4
-wisp_nproc: 75
-plot_sky: false
-cfnoise_nproc: 75
-bkg_nproc: 75
+
+# --- Calibration steps to skip ---
+skip_steps: []
+
+# --- Performance (parallel workers per stage) ---
+stage1_nproc: 16
+stage2_nproc: 16
+wisp_nproc: 16
+cfnoise_nproc: 16
+bkg_nproc: 16
 stage3_use_multiprocessing: true
-min_processes: 3
-outlier_in_memory: true
+min_processes: 2
+
+# --- WISP correction ---
+wisp_directory: /path/to/wisp-templates
+wisp_create_segmap: true
+wisp_seg_from_lw: true
+wisp_sigma: 0.8
+wisp_npixels: 10
+wisp_dilate_segmap: 5
+wisp_save_segmap: false
+wisp_sub_wisp: true
+wisp_gauss_smooth_wisp: false
+wisp_gauss_stddev: 3.0
+wisp_scale_wisp: true
+wisp_scale_method: mad
+wisp_poly_degree: 5
+wisp_factor_min: 0.0
+wisp_factor_max: 2.0
+wisp_factor_step: 0.01
+wisp_min_wisp: null
+wisp_flag_wisp_thresh: null
+wisp_dq_val: 1
+wisp_correct_rows: true
+wisp_correct_cols: false
+wisp_save_model: true
+wisp_plot: true
+wisp_show_plot: false
+
+# --- 1/f noise correction ---
+cfnoise_whole_image: false
+cfnoise_threshold1: 1.0
+cfnoise_threshold2: 98.0
+cfnoise_npixels: 200
+cfnoise_mask_size: 11
+cfnoise_interp_step: 4
+
+# --- Background subtraction ---
+plot_sky: false
+bkg_tier_nsigma:
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+bkg_tier_npixels:
+- 15
+- 10
+- 3
+- 1
+bkg_tier_kernel_size:
+- 25
+- 15
+- 5
+- 2
+bkg_tier_dilate_size:
+- 33
+- 25
+- 21
+- 19
+bkg_faint_tiers:
+- 3
+- 4
+bkg_ring_radius_in: 40.0
+bkg_ring_width: 3.0
+bkg_ring_clip_max_sigma: 5.0
+bkg_ring_clip_box_size: 100
+bkg_ring_clip_filter_size: 3
+bkg_bg_box_size: 5
+bkg_bg_filter_size: 3
+bkg_bg_exclude_percentile: 90
+bkg_bg_sigma: 3.0
+bkg_plot_smooth: 0
+bkg_interpolator: zoom
+bkg_dq_flags_to_mask:
+- SATURATED
+
+# --- Mosaic creation (stage 3) ---
 pixel_scale: 0.02
 pixfrac: 0.75
 rotation: 0.0
 res_kernel: square
 resample_in_memory: true
+outlier_in_memory: true
 external_reference: GAIADR3
 starfinder: segmentation
 snr_threshold: 5.0
 abs_fitgeometry: rshift
 fitgeometry: rshift
 skymethod: match
+
+# --- Pipeline step overrides ---
+stage1_step_overrides: {}
+stage2_step_overrides: {}
+stage3_step_overrides: {}
+
+# --- Output extensions (i2d) ---
 extract_sci: true
 extract_err: true
 extract_con: false
@@ -34,21 +128,13 @@ extract_wht: true
 extract_var_poisson: false
 extract_var_rnoise: false
 extract_var_flat: false
-skip_steps:
-- download_uncal_references
-- stage1
-- download_rate_references
-- stage2
-- wisp_subtraction
-- cal_fnoise_reduction
-- background_subtraction
-- download_cal_references
-- stage3
+
+# --- Color image ---
 color_image_enabled: true
+color_image_subtract_sky: true
 color_image_min_level: 0.001
 color_image_max_quantile: 0.9999
 color_image_gamma: 2.2
-color_image_subtract_sky: true
 color_image_filter_hues:
   F090W: 240.0
   F200W: 164.57142857142858
@@ -60,3 +146,4 @@ color_image_filter_hues:
   F300M: 96.0
   F410M: 21.942857142857164
   F444W: 0.0
+

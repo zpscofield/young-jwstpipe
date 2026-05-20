@@ -1120,7 +1120,7 @@ with st.expander("Advanced background subtraction options"):
     st.caption(
         "Tiered source masking runs 4 passes from bright (tier 1) to faint "
         "(tier 4) before estimating the sky. These defaults come from the "
-        "CEERS-derived algorithm — change them only if you know why."
+        "CEERS-derived algorithm. change them only if you know why."
     )
     _tier_nsigma_def = list(_get(current, "bkg_tier_nsigma", [1.5, 1.5, 1.5, 1.5]))
     _tier_npix_def = list(_get(current, "bkg_tier_npixels", [15, 10, 3, 1]))
@@ -1386,6 +1386,40 @@ with st.expander("Advanced WISP subtraction options"):
             "Show plot (notebook only)",
             value=bool(_get(current, "wisp_show_plot", False)),
         )
+
+with st.expander("Advanced 1/f noise (cal) options"):
+    st.caption(
+        "Controls the source masking and baseline interpolation used by the "
+        "cal-level 1/f noise correction. Defaults match the algorithm's "
+        "originals — change only if you know why. The per-amplifier column "
+        "splits (512-pixel boundaries) are fixed by the NIRCam detector layout "
+        "and are not exposed."
+    )
+    _cf1, _cf2 = st.columns(2)
+    with _cf1:
+        new_config["cfnoise_threshold1"] = st.number_input(
+            "Broad-mask detection sigma (threshold1)", min_value=0.0,
+            value=float(_get(current, "cfnoise_threshold1", 1)), step=0.5,
+            help="Nsigma passed to detect_threshold for the broad source mask.",
+        )
+        new_config["cfnoise_threshold2"] = st.number_input(
+            "Narrow-mask percentile (threshold2)", min_value=0.0, max_value=100.0,
+            value=float(_get(current, "cfnoise_threshold2", 98)), step=1.0,
+            help="Percentile used to mask the dx (derivative) image.",
+        )
+        new_config["cfnoise_interp_step"] = int(st.number_input(
+            "Baseline anchor spacing (pixels)", min_value=1,
+            value=int(_get(current, "cfnoise_interp_step", 4)), step=1,
+        ))
+    with _cf2:
+        new_config["cfnoise_npixels"] = int(st.number_input(
+            "Source detection min pixels", min_value=1,
+            value=int(_get(current, "cfnoise_npixels", 200)), step=1,
+        ))
+        new_config["cfnoise_mask_size"] = int(st.number_input(
+            "Source mask dilation size", min_value=1,
+            value=int(_get(current, "cfnoise_mask_size", 11)), step=1,
+        ))
 
 with st.expander("Extract i2d extensions"):
     col_e1, col_e2 = st.columns(2)

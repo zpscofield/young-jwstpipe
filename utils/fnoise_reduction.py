@@ -18,7 +18,15 @@ from photutils.segmentation import detect_threshold
 from photutils.segmentation import detect_sources as phot_detect_sources
 from scipy.ndimage import binary_dilation
 
+import yaml
+
 from log_utils import archive_existing_log
+
+# Tunable settings come from config.yaml (set via the Streamlit UI). Each
+# read below falls back to the original hardcoded value so behaviour is
+# unchanged unless the user overrides it.
+with open('config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file) or {}
 
 
 def setup_logger(output_dir):
@@ -86,12 +94,12 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
     data_filled = data.copy()
 
     thr1 = detect_threshold(data_filled, nsigma=threshold1, mask=nanmask)
-    segm1 = phot_detect_sources(data_filled, thr1, npixels=200, mask=nanmask)
+    segm1 = phot_detect_sources(data_filled, thr1, npixels=config.get('cfnoise_npixels', 200), mask=nanmask)
 
     if segm1 is None:
         mask_map1 = np.zeros_like(data_filled, dtype=bool)
     else:
-        mask_map1 = segm1.make_source_mask(size=11)
+        mask_map1 = segm1.make_source_mask(size=config.get('cfnoise_mask_size', 11))
 
     # mask NaN region in mask_map1
     mask_map1[nanmask] = False
@@ -228,7 +236,7 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
     else:
         y_ref = reconstruct_image_from_dy(dy_ref, initial_values=ori_imag[0,:])
 
-    step = 4
+    step = config.get('cfnoise_interp_step', 4)
     if split == True:
         bg0 = (mask_map1[:, 0:512] == False)
         bg1 = (mask_map1[:, 512:1024] == False)
@@ -330,7 +338,7 @@ def fnoise_reduction(ori_imag, output_dir, threshold1=1, threshold2 = 98):
     #### step 4-2. reconstruct image from dy_ref
     x_ref = reconstruct_image_from_dx(dx_ref, initial_values=np.zeros(2048))
     nx = x_ref.shape[1]
-    step = 4
+    step = config.get('cfnoise_interp_step', 4)
     bg = (mask_map1 == False)
     anchors = np.arange(0, nx, step)
     if anchors[-1] != nx - 1:
@@ -400,7 +408,11 @@ def process_file(args):
     x_all = np.zeros((2048,2048))
     y_all = np.zeros((2048,2048))
 
-    denoise, noise = fnoise_reduction(ori_imag, output_dir)
+    denoise, noise = fnoise_reduction(
+        ori_imag, output_dir,
+        threshold1=config.get('cfnoise_threshold1', 1),
+        threshold2=config.get('cfnoise_threshold2', 98),
+    )
     ori_imag -= noise
 
     save_denoise = cp.deepcopy(ori_imag)

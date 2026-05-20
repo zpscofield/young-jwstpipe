@@ -89,6 +89,28 @@ def bkgsub(directory, img, log, output_dir, suffix, plot_sky=False):
     bkg_suffix = 'bkgsub1'
     file_suffix = suffix
     bs = background_subtraction.SubtractBackground(log=log)
+    # Apply user-tunable settings from config.yaml, falling back to the
+    # module's own defaults when a key is absent so behaviour is unchanged
+    # unless the user explicitly overrides a value in the UI.
+    bs.tier_nsigma = tuple(config.get('bkg_tier_nsigma', bs.tier_nsigma))
+    bs.tier_npixels = tuple(config.get('bkg_tier_npixels', bs.tier_npixels))
+    bs.tier_kernel_size = tuple(config.get('bkg_tier_kernel_size', bs.tier_kernel_size))
+    bs.tier_dilate_size = tuple(config.get('bkg_tier_dilate_size', bs.tier_dilate_size))
+    bs.faint_tiers_for_evaluation = tuple(
+        config.get('bkg_faint_tiers', bs.faint_tiers_for_evaluation)
+    )
+    bs.ring_radius_in = config.get('bkg_ring_radius_in', bs.ring_radius_in)
+    bs.ring_width = config.get('bkg_ring_width', bs.ring_width)
+    bs.ring_clip_max_sigma = config.get('bkg_ring_clip_max_sigma', bs.ring_clip_max_sigma)
+    bs.ring_clip_box_size = config.get('bkg_ring_clip_box_size', bs.ring_clip_box_size)
+    bs.ring_clip_filter_size = config.get('bkg_ring_clip_filter_size', bs.ring_clip_filter_size)
+    bs.bg_box_size = config.get('bkg_bg_box_size', bs.bg_box_size)
+    bs.bg_filter_size = config.get('bkg_bg_filter_size', bs.bg_filter_size)
+    bs.bg_exclude_percentile = config.get('bkg_bg_exclude_percentile', bs.bg_exclude_percentile)
+    bs.bg_sigma = config.get('bkg_bg_sigma', bs.bg_sigma)
+    bs.plot_smooth = config.get('bkg_plot_smooth', bs.plot_smooth)
+    bs.interpolator = config.get('bkg_interpolator', bs.interpolator)
+    bs.dq_flags_to_mask = tuple(config.get('bkg_dq_flags_to_mask', bs.dq_flags_to_mask))
     bs.suffix = bkg_suffix
     bs.replace_sci = True
     bs.do_background_subtraction(directory, img)

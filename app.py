@@ -1096,6 +1096,131 @@ with st.expander("Tweakreg and skymatch"):
         ),
     )
 
+with st.expander("Advanced background subtraction options"):
+    st.caption(
+        "Tiered source masking runs 4 passes from bright (tier 1) to faint "
+        "(tier 4) before estimating the sky. These defaults come from the "
+        "CEERS-derived algorithm — change them only if you know why."
+    )
+    _tier_nsigma_def = list(_get(current, "bkg_tier_nsigma", [1.5, 1.5, 1.5, 1.5]))
+    _tier_npix_def = list(_get(current, "bkg_tier_npixels", [15, 10, 3, 1]))
+    _tier_kernel_def = list(_get(current, "bkg_tier_kernel_size", [25, 15, 5, 2]))
+    _tier_dilate_def = list(_get(current, "bkg_tier_dilate_size", [33, 25, 21, 19]))
+
+    _hcols = st.columns([1, 2, 2, 2, 2])
+    _hcols[0].markdown("**Tier**")
+    _hcols[1].markdown("**nsigma**")
+    _hcols[2].markdown("**npixels**")
+    _hcols[3].markdown("**kernel**")
+    _hcols[4].markdown("**dilate**")
+
+    _new_nsigma, _new_npix, _new_kernel, _new_dilate = [], [], [], []
+    for _t in range(4):
+        _rcols = st.columns([1, 2, 2, 2, 2])
+        _rcols[0].markdown(f"{_t + 1}")
+        _new_nsigma.append(
+            float(_rcols[1].number_input(
+                f"nsigma tier {_t + 1}", value=float(_tier_nsigma_def[_t]),
+                min_value=0.0, step=0.1, label_visibility="collapsed",
+                key=f"bkg_nsigma_{_t}",
+            ))
+        )
+        _new_npix.append(
+            int(_rcols[2].number_input(
+                f"npixels tier {_t + 1}", value=int(_tier_npix_def[_t]),
+                min_value=1, step=1, label_visibility="collapsed",
+                key=f"bkg_npix_{_t}",
+            ))
+        )
+        _new_kernel.append(
+            int(_rcols[3].number_input(
+                f"kernel tier {_t + 1}", value=int(_tier_kernel_def[_t]),
+                min_value=1, step=1, label_visibility="collapsed",
+                key=f"bkg_kernel_{_t}",
+            ))
+        )
+        _new_dilate.append(
+            int(_rcols[4].number_input(
+                f"dilate tier {_t + 1}", value=int(_tier_dilate_def[_t]),
+                min_value=0, step=1, label_visibility="collapsed",
+                key=f"bkg_dilate_{_t}",
+            ))
+        )
+    new_config["bkg_tier_nsigma"] = _new_nsigma
+    new_config["bkg_tier_npixels"] = _new_npix
+    new_config["bkg_tier_kernel_size"] = _new_kernel
+    new_config["bkg_tier_dilate_size"] = _new_dilate
+
+    new_config["bkg_faint_tiers"] = st.multiselect(
+        "Tiers used for residual-bias evaluation",
+        [1, 2, 3, 4],
+        default=list(_get(current, "bkg_faint_tiers", [3, 4])),
+        help="Which tiers' masks define the faint regions used to evaluate residual bias.",
+    )
+
+    _bk1, _bk2 = st.columns(2)
+    with _bk1:
+        new_config["bkg_ring_radius_in"] = st.number_input(
+            "Ring inner radius", min_value=1.0,
+            value=float(_get(current, "bkg_ring_radius_in", 40)), step=1.0,
+        )
+        new_config["bkg_ring_width"] = st.number_input(
+            "Ring width", min_value=1.0,
+            value=float(_get(current, "bkg_ring_width", 3)), step=1.0,
+        )
+        new_config["bkg_ring_clip_max_sigma"] = st.number_input(
+            "Ring clip max sigma", min_value=0.1,
+            value=float(_get(current, "bkg_ring_clip_max_sigma", 5.0)), step=0.5,
+        )
+        new_config["bkg_ring_clip_box_size"] = int(st.number_input(
+            "Ring clip box size", min_value=1,
+            value=int(_get(current, "bkg_ring_clip_box_size", 100)), step=1,
+        ))
+        new_config["bkg_ring_clip_filter_size"] = int(st.number_input(
+            "Ring clip filter size", min_value=1,
+            value=int(_get(current, "bkg_ring_clip_filter_size", 3)), step=1,
+        ))
+    with _bk2:
+        new_config["bkg_bg_box_size"] = int(st.number_input(
+            "Background2D box size", min_value=1,
+            value=int(_get(current, "bkg_bg_box_size", 5)), step=1,
+        ))
+        new_config["bkg_bg_filter_size"] = int(st.number_input(
+            "Background2D filter size", min_value=1,
+            value=int(_get(current, "bkg_bg_filter_size", 3)), step=1,
+        ))
+        new_config["bkg_bg_exclude_percentile"] = int(st.number_input(
+            "Background2D exclude percentile", min_value=0, max_value=100,
+            value=int(_get(current, "bkg_bg_exclude_percentile", 90)), step=1,
+        ))
+        new_config["bkg_bg_sigma"] = st.number_input(
+            "Background2D sigma", min_value=0.1,
+            value=float(_get(current, "bkg_bg_sigma", 3)), step=0.5,
+        )
+        new_config["bkg_plot_smooth"] = int(st.number_input(
+            "Diagnostic plot smoothing (0 = off)", min_value=0,
+            value=int(_get(current, "bkg_plot_smooth", 0)), step=1,
+        ))
+
+    new_config["bkg_interpolator"] = st.selectbox(
+        "Background interpolator",
+        ["zoom", "IDW"],
+        index=["zoom", "IDW"].index(_get(current, "bkg_interpolator", "zoom")),
+    )
+    _saved_dq_flags = list(_get(current, "bkg_dq_flags_to_mask", ["SATURATED"]))
+    _dq_flag_options = sorted(
+        {
+            "DO_NOT_USE", "SATURATED", "JUMP_DET", "DROPOUT", "OUTLIER",
+            "PERSISTENCE", "AD_FLOOR", "UNRELIABLE_ERROR", "NON_SCIENCE",
+        }
+        | set(_saved_dq_flags)
+    )
+    new_config["bkg_dq_flags_to_mask"] = st.multiselect(
+        "DQ flags to mask before fitting the background",
+        _dq_flag_options,
+        default=_saved_dq_flags,
+    )
+
 with st.expander("Extract i2d extensions"):
     col_e1, col_e2 = st.columns(2)
     with col_e1:

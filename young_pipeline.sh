@@ -20,6 +20,28 @@ should_skip_step() {
     yq '.skip_steps // [] | .[]' "$CONFIG_FILE" 2>/dev/null | grep -q "$step"
 }
 
+detect_cal_suffix() {
+    # Find the most-processed flavor of cal files in stage2_output and set
+    # file_pattern/suffix2 accordingly. Every step that consumes cal files
+    # (background subtraction, reference download, stage 3) calls this
+    # itself, so skipping one step never leaves suffix2 unset for the next.
+    if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
+        echo "[Detected *_cal_cfnoise.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
+        suffix2="_cfnoise"
+    elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
+        echo "[Detected *_cal_wisp.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
+        suffix2="_wisp"
+    elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
+        echo "[Detected *_cal.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
+        suffix2=""
+    else
+        return 1
+    fi
+}
+
 delete_directory_if_exists() {
     local dir=$1
     if [ -d "$dir" ]; then
@@ -219,19 +241,7 @@ run_pipeline() {
         echo "« Subtracting background from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
-        if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
-            echo "[Detected *_cal_cfnoise.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
-            suffix2="_cfnoise"
-        elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
-            echo "[Detected *_cal_wisp.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
-            suffix2="_wisp"
-        elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
-            echo "[Detected *_cal.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
-            suffix2=""
-        else
+        if ! detect_cal_suffix; then
             echo "[Error: No suitable input files found for background subtraction!]"
             exit 1
         fi
@@ -253,7 +263,11 @@ run_pipeline() {
     if ! should_skip_step "download_cal_references"; then
         echo "« Downloading references for cal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        crds bestrefs --files $OBS_DIR/stage2_output/jw*$suffix2.fits --sync-references=1
+        if ! detect_cal_suffix; then
+            echo "[Error: No cal files found for reference download!]"
+            exit 1
+        fi
+        crds bestrefs --files $file_pattern --sync-references=1
         echo ""
     else
         echo "[Download cal references skipped]"
@@ -265,6 +279,10 @@ run_pipeline() {
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
+        if ! detect_cal_suffix; then
+            echo "[Error: No cal files found for stage 3!]"
+            exit 1
+        fi
         python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
         echo ""
     else

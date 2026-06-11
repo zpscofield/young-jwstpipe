@@ -171,9 +171,9 @@ def extract_data(filter_dir, target, extract_settings, log):
 
 def get_filter_from_exposure(exp):
     header = fits.getheader(exp, ext=0)
-    return header['FILTER']
+    return header.get('FILTER')
 
-def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal"):
+def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=""):
     """
     Group exposures by filter (read from the FILTER header). Returns a
     dict {filter_name: [absolute_path, ...]} and creates an empty
@@ -182,10 +182,13 @@ def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal")
     Files are NOT moved or copied; the ASN file generated later will
     reference them by absolute path so stage 3 can read them in place.
     """
-    files = [file for file in os.listdir(input_dir) if file.endswith(f'{suffix}.fits')]
+    # Match 'cal{suffix}.fits' rather than bare '{suffix}.fits' so diagnostic
+    # products in the same directory (*_wisp_model.fits, *_cfnoise_model.fits)
+    # can never be picked up as science exposures, even with an empty suffix.
+    files = [file for file in os.listdir(input_dir) if file.endswith(f'cal{suffix}.fits')]
 
     if not files:
-        log.info(f"No '*{suffix}.fits' files found in the input directory. Exiting function.")
+        log.info(f"No '*cal{suffix}.fits' files found in the input directory. Exiting function.")
         return {}
 
     filter_to_paths = {}
@@ -194,6 +197,9 @@ def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal")
         if not os.path.isfile(full_path):
             continue
         filter_name = get_filter_from_exposure(full_path)
+        if filter_name is None:
+            log.warning(f"Skipping {filename}: no FILTER keyword in the primary header.")
+            continue
         filter_to_paths.setdefault(filter_name, []).append(full_path)
 
     for filter_name in filter_to_paths:
@@ -382,7 +388,9 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--input_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--target', type=str, help='Target name')
-    parser.add_argument('--input_suffix', type=str, default="_cal", help='Suffix of the input cal files')
+    parser.add_argument('--input_suffix', type=str, default="",
+                        help="Suffix after 'cal' in the input filenames, e.g. '_cfnoise' "
+                             "for *_cal_cfnoise.fits. Empty selects plain *_cal.fits.")
 
     args = parser.parse_args()
 
@@ -397,6 +405,12 @@ if __name__ == "__main__":
     from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM as filter_mapping
 
     filter_to_paths = organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
+    if not filter_to_paths:
+        msg = (f"No usable '*cal{args.input_suffix}.fits' exposures found in {input_dir}. "
+               "Check --input_suffix against the files in the stage 2 output directory.")
+        log.error(msg)
+        print(f'[Stage3] Error: {msg}', flush=True)
+        sys.exit(1)
     filter_names = list(filter_to_paths.keys())
     filter_dirs = [os.path.join(output_base_dir, f) for f in filter_names]
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)

@@ -7,6 +7,7 @@ import numpy as np
 from jwst.pipeline import Image3Pipeline
 from astropy.io import fits
 from tqdm.auto import tqdm
+from glob import glob
 import logging
 import sys
 import argparse
@@ -151,10 +152,24 @@ def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, lon
                     log.info(f"Completed processing for {dir}")
                     pbar.update(1)
 
+def find_i2d_file(output_dir):
+    """Return the path of the single *_i2d.fits mosaic in output_dir, or None.
+
+    stpipe derives the output filename from the ASN product name but
+    truncates it at the last dot, so a target like 'PLCKG287+32.9' yields
+    'PLCKG287+32_i2d.fits'. The name therefore cannot be reconstructed from
+    the target; glob for it instead. Each filter's output_files directory
+    holds exactly one mosaic, so the match is unambiguous.
+    """
+    matches = sorted(glob(os.path.join(output_dir, '*_i2d.fits')))
+    return matches[0] if matches else None
+
 def extract_data(filter_dir, target, extract_settings, log):
     suffixes = ['sci', 'err', 'con', 'wht', 'var_poisson', 'var_rnoise', 'var_flat']
     output_dir = filter_dir + '/output_files'
-    processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
+    processed_file = find_i2d_file(output_dir)
+    if processed_file is None:
+        raise FileNotFoundError(f"No *_i2d.fits mosaic found in {output_dir}.")
     log.info(f"Extracting requested data from {os.path.basename(filter_dir)} i2d file...")
     for i in range(len(extract_settings)):
         if extract_settings[i]:
@@ -259,7 +274,9 @@ def create_custom_association(filter_dir, output_filename, program, target, inst
 def convert_catalog_to_tweakreg_format(folder_name, filter):
     folder_path = os.path.join(os.getcwd(), folder_name)
     
-    awk_command = f"awk '{{print $4 \",\" $5}}' {folder_path}/*nircam_clear-{filter}_cat.ecsv > {folder_path}/{filter}.tmp"
+    # The catalog shares the mosaic's stpipe-derived stem, which is truncated
+    # at the last dot of the target name, so match any *_cat.ecsv here.
+    awk_command = f"awk '{{print $4 \",\" $5}}' {folder_path}/*_cat.ecsv > {folder_path}/{filter}.tmp"
     os.system(awk_command)
     os.system(f"tail -n +270 {folder_path}/{filter}.tmp > {folder_path}/{filter}.tmp2")
     os.system(f"echo 'RA,DEC' > {folder_path}/{filter}.csv")
@@ -282,8 +299,7 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
 
     output_dir = filter_dir + '/output_files'
 
-    processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
-    if os.path.exists(processed_file):
+    if find_i2d_file(output_dir):
         log.info(f"Skipping processing for {filter_dir} as output already exists.")
         return
     
@@ -454,8 +470,9 @@ if __name__ == "__main__":
     path_longest = sorted_filter_dirs[0] + '/output_files/'
     convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
     long_cat = os.path.join(path_longest, f'{sorted_filters[0]}.csv')
-    long_list = [file for file in os.listdir(path_longest) if file.endswith(f'nircam_clear-{sorted_filters[0]}_i2d.fits')]
-    long_processed_file = os.path.join(path_longest, long_list[0])
+    long_processed_file = find_i2d_file(path_longest)
+    if long_processed_file is None:
+        raise FileNotFoundError(f"No *_i2d.fits mosaic found in {path_longest}.")
     long_params = extract_resample_info(long_processed_file)
 
     if use_multiprocessing == True:

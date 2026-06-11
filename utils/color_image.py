@@ -162,8 +162,10 @@ def find_i2d_files(obs_dir: str | os.PathLike, target: str) -> dict[str, Path]:
     if not stage3.is_dir():
         return found
 
-    pattern = f"{target}_nircam_clear-*_i2d.fits"
-    for path in stage3.glob(f"*/output_files/{pattern}"):
+    # stpipe truncates the output stem at the last dot of the target name
+    # (e.g. 'PLCKG287+32.9' -> 'PLCKG287+32_i2d.fits'), so match any i2d;
+    # each filter's output_files directory holds exactly one mosaic.
+    for path in stage3.glob("*/output_files/*_i2d.fits"):
         # Filter name is the directory two levels up from the file.
         filter_name = path.parent.parent.name
         found[filter_name] = path

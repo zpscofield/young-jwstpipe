@@ -1,5 +1,9 @@
-# YOUNG JWST Pipeline configuration
-# Edit values below, or configure everything from the UI (./start.sh).
+# YOUNG JWST Pipeline default configuration
+#
+# This file is the template and is never written by the pipeline. The
+# interface (./start.sh) loads it the first time, then saves your settings
+# to config.yaml next to it, which is what young_pipeline.sh reads. To run
+# without the interface, copy this file to config.yaml and edit it.
 # Section headers are regenerated automatically when the file is saved.
 
 # --- CRDS ---
@@ -8,7 +12,7 @@ crds_server_url: https://jwst-crds.stsci.edu
 
 # --- Paths ---
 pipeline_directory: .
-data_directory: /Volumes/YOUNG6/JWST_pipeline_dev/data
+data_directory: ''
 output_directory: .
 
 # --- Output and grouping ---

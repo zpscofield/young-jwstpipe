@@ -19,6 +19,9 @@ data/
 .idea/
 .vscode/
 
+# The user's settings; config.default.yaml is the tracked template
+/config.yaml
+
 # Streamlit state
 .streamlit/secrets.toml
 .streamlit/.*.log

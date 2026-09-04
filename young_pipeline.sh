@@ -4,6 +4,14 @@ START_TIME_TOTAL=$(date +%s)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CONFIG_FILE="config.yaml"
 
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[Error] $CONFIG_FILE not found in $(pwd)."
+    echo "        The interface (./start.sh) creates it when you save; to run"
+    echo "        without the interface, copy config.default.yaml to config.yaml"
+    echo "        and edit the paths."
+    exit 1
+fi
+
 # Read a value from config.yaml. Strings print bare, numbers and booleans
 # print JSON-style, lists print one item per line, dicts print as JSON,
 # and null/missing keys print an empty line. See utils/config_get.py.

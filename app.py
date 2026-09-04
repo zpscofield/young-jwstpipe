@@ -54,7 +54,8 @@ from pipeline_run import load_run, read_log_tail, start_run, stop_run
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = REPO_ROOT / "config.yaml"
+CONFIG_PATH = REPO_ROOT / "config.yaml"  # the user's settings; created on first save
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.default.yaml"  # tracked template, never written
 PIPELINE_SCRIPT = REPO_ROOT / "young_pipeline.sh"
 RESOURCES = REPO_ROOT / "resources"
 MAX_LOG_LINES = 500
@@ -174,9 +175,11 @@ PIPELINE_STEPS = [
 
 
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
+    """Load config.yaml, or config.default.yaml until the user has saved one."""
+    path = CONFIG_PATH if CONFIG_PATH.exists() else DEFAULT_CONFIG_PATH
+    if not path.exists():
         return {}
-    with open(CONFIG_PATH, "r") as f:
+    with open(path, "r") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -213,8 +216,11 @@ def validate_config(config: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
 
-    data_dir = Path(str(config.get("data_directory", "")).strip()).expanduser()
-    if not str(data_dir):
+    data_dir_raw = str(config.get("data_directory") or "").strip()
+    data_dir = Path(data_dir_raw).expanduser()
+    if not data_dir_raw:
+        # Path("") is ".", so test the raw string; otherwise an empty field
+        # would pass as the current directory and be scanned for uncal files.
         errors.append("Data directory is empty.")
     elif not data_dir.exists():
         errors.append(f"Data directory does not exist: {data_dir}")
@@ -1976,11 +1982,20 @@ for message in errors:
 current_run = load_run(REPO_ROOT)
 run_in_progress = current_run is not None and current_run.running
 
-left, middle, right = st.columns([1, 1, 3])
+left, middle, reset, right = st.columns([1, 1, 1, 2])
 with left:
     if st.button("Save config.yaml"):
         save_config(new_config)
         st.success(f"Saved {CONFIG_PATH}")
+with reset:
+    if st.button(
+        "Reset to defaults",
+        disabled=run_in_progress,
+        help=f"Delete {CONFIG_PATH.name} and reload every setting from {DEFAULT_CONFIG_PATH.name}.",
+    ):
+        CONFIG_PATH.unlink(missing_ok=True)
+        st.session_state.clear()
+        st.rerun()
 with middle:
     run_clicked = st.button(
         "Save & Run pipeline ▶",

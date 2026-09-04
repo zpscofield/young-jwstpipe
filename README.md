@@ -75,7 +75,7 @@ The page is organized top to bottom:
 7. **Required mosaic creation settings** — the stage-3 settings you should review for your data: resample (pixel scale, pixfrac, rotation, kernel), outlier detection, tweakreg (reference catalog and alignment), and skymatch.
 8. **Color image** — per-filter hues and stretch settings; generate an RGB color image from the stage-3 mosaics.
 
-Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
+Settings are loaded from `config.default.yaml` the first time and saved to `config.yaml` next to it, so the shipped defaults are never overwritten; **Reset to defaults** deletes your `config.yaml` and reloads the template. Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
 
 **Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./start.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If the pipeline is running on your own computer, putting it to sleep or shutting it down stops the reduction like any other process.
 
@@ -97,9 +97,10 @@ Starting at Stage 2 or Stage 3 without the required prior outputs will result in
 
 ### Running without the interface
 
-The interface writes `config.yaml` and then runs `young_pipeline.sh`, which is the actual execution engine. You can also edit `config.yaml` by hand and run the engine directly:
+The interface writes `config.yaml` and then runs `young_pipeline.sh`, which is the actual execution engine. You can also create `config.yaml` by hand and run the engine directly:
 
 ```bash
+cp config.default.yaml config.yaml   # then edit the paths
 ./young_pipeline.sh
 ```
 

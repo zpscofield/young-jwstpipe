@@ -19,8 +19,9 @@ A streamlined implementation of the James Webb Space Telescope (JWST) calibratio
     - **Wisp correction** (modified version of Ben Sunnquist's wisp correction algorithm, JWST documentation version 4).
     - **Background subtraction** (modified version of Henry C. Ferguson's tiered-source-masking background subtraction). The background subtraction code is courtesy of the [*CEERS team*](https://github.com/ceers/ceers-nircam).
 - Speeds up execution with parallel processing (Python multiprocessing) across exposures and filters; worker counts are configurable per stage.
-- Organizes calibrated exposures by filter and uses the source catalog from the longest-wavelength filter for astrometric alignment.
-    - The longest-wavelength filter can also be matched to an external catalog (e.g. `GAIADR3`). If no external catalog is provided, it is not matched to any catalog.
+- Organizes calibrated exposures by filter and aligns every filter to the source catalog of a **reference filter**. By default the reference is the filter covering the largest area, with the longest wavelength breaking ties, so ordinary single-program data uses the reddest filter; it can also be chosen explicitly.
+    - The reference filter can also be matched to an external catalog (e.g. `GAIADR3`). If no external catalog is provided, it is not matched to any catalog.
+    - All filters are resampled onto one shared pixel grid. By default that grid covers the combined footprint of every filter, so combining programs with different coverage never crops a filter; optionally it can be limited to the reference filter's footprint.
     - Resampling parameters are set in the interface. The pipeline keeps all necessary parameters (pixel scale, pixfrac, resampling kernel, center pixel, center RA/Dec, output shape, rotation) consistent between filters.
 - Exposes every JWST step parameter for Stages 1, 2, and 3 as guided overrides, introspected from the installed `jwst` version, so any sub-step parameter can be tuned without editing code.
 - Produces aligned mosaic images, segmentation maps, and source catalogs for each filter, and can build a stretched RGB **color image** from the resulting mosaics.
@@ -103,7 +104,7 @@ The page is organized top to bottom:
 4. **Performance** — parallel worker counts per stage, plus stage-3 multiprocessing options.
 5. **CRDS** — CRDS cache path and server URL.
 6. **Advanced settings** — guided per-step parameter overrides for Stages 1/2/3 (with a reference of every parameter for your installed `jwst` version), and the background / WISP / 1/f-noise step settings.
-7. **Required mosaic creation settings** — the stage-3 settings you should review for your data: resample (pixel scale, pixfrac, rotation, kernel), outlier detection, tweakreg (reference catalog and alignment), and skymatch.
+7. **Required mosaic creation settings** — the stage-3 settings you should review for your data: reference filter and mosaic footprint, resample (pixel scale, pixfrac, rotation, kernel), outlier detection, tweakreg (reference catalog and alignment), and skymatch.
 8. **Color image** — per-filter hues and stretch settings; generate an RGB color image from the stage-3 mosaics.
 
 Settings are loaded from `config.default.yaml` the first time and saved to `config.yaml` next to it, so the shipped defaults are never overwritten; **Reset to defaults** deletes your `config.yaml` and reloads the template. Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).

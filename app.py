@@ -1545,6 +1545,50 @@ _in_memory_note = (
     "parallel processes are used in stage 3."
 )
 
+st.markdown("**Reference filter and mosaic footprint**")
+_AUTO_REF_LABEL = "Automatic (largest footprint, then longest wavelength)"
+_detected_filters = _scan_uncal_filters(new_config.get("data_directory") or "")
+_current_ref = str(_get(current, "reference_filter", "auto") or "auto")
+_ref_options = [_AUTO_REF_LABEL] + list(_detected_filters)
+if _current_ref.lower() != "auto" and _current_ref.upper() not in _ref_options:
+    _ref_options.append(_current_ref.upper())
+col_ref, col_fp = st.columns(2)
+with col_ref:
+    _ref_choice = st.selectbox(
+        "Reference filter",
+        options=_ref_options,
+        index=0 if _current_ref.lower() == "auto" else _ref_options.index(_current_ref.upper()),
+        help=(
+            "The filter processed first. Its source catalog is the astrometric "
+            "reference every other filter is aligned to. Automatic picks the "
+            "filter covering the largest area; filters within 5% of the largest "
+            "count as equal and the longest wavelength among them wins, so "
+            "ordinary single-program data still uses the reddest filter. The "
+            "list shows filters found in the data directory."
+        ),
+    )
+    new_config["reference_filter"] = "auto" if _ref_choice == _AUTO_REF_LABEL else _ref_choice
+with col_fp:
+    _fp_labels = {
+        "all_filters": "Combined footprint of all filters",
+        "reference_filter": "Reference filter's footprint only",
+    }
+    _current_fp = str(_get(current, "mosaic_footprint", "all_filters") or "all_filters")
+    new_config["mosaic_footprint"] = st.radio(
+        "Mosaic footprint",
+        options=list(_fp_labels),
+        index=list(_fp_labels).index(_current_fp) if _current_fp in _fp_labels else 0,
+        format_func=lambda k: _fp_labels[k],
+        help=(
+            "Every filter is resampled onto one shared pixel grid. Combined "
+            "footprint sizes that grid to cover every exposure of every filter, "
+            "so nothing is cropped; areas a filter did not observe are empty in "
+            "its mosaic. Reference filter only crops every mosaic to the "
+            "reference filter's coverage, which uses less memory and disk when "
+            "the footprints differ a lot."
+        ),
+    )
+
 st.markdown("**Resample**")
 col_a, col_b = st.columns(2)
 with col_a:

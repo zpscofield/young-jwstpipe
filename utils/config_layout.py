@@ -49,6 +49,7 @@ CONFIG_LAYOUT = [
         "bkg_interpolator", "bkg_dq_flags_to_mask",
     ]),
     ("Mosaic creation (stage 3)", [
+        "reference_filter", "mosaic_footprint",
         "pixel_scale", "pixfrac", "rotation", "res_kernel", "resample_in_memory",
         "outlier_in_memory", "external_reference", "starfinder", "snr_threshold",
         "abs_fitgeometry", "fitgeometry", "skymethod",

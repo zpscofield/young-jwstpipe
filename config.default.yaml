@@ -106,6 +106,8 @@ bkg_dq_flags_to_mask:
 - SATURATED
 
 # --- Mosaic creation (stage 3) ---
+reference_filter: auto
+mosaic_footprint: all_filters
 pixel_scale: 0.02
 pixfrac: 0.75
 rotation: 0.0

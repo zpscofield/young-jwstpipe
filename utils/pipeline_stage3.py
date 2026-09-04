@@ -125,15 +125,15 @@ def setup_filter_logger(filter_dir):
                 logger.removeHandler(handler)
     return log_filter, log_file_path
 
-def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, extract_settings, config):
+def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, extract_settings, config, output_wcs_path=None):
     log_filter, log_file_path = setup_filter_logger(filter_dir)
     try:
-        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=log_file_path)
+        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=log_file_path, output_wcs_path=output_wcs_path)
         extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
 
-def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config):
+def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config, output_wcs_path=None):
     num_workers = min(config['min_processes'], len(filter_dirs))
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -141,7 +141,7 @@ def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, lon
             futures = {}
             for dir in filter_dirs:
                 filter_name = os.path.basename(dir)
-                future = executor.submit(process_filter, dir, filter_to_paths[filter_name], log, target, long_cat, long_params, extract_settings, config)
+                future = executor.submit(process_filter, dir, filter_to_paths[filter_name], log, target, long_cat, long_params, extract_settings, config, output_wcs_path)
                 futures[future] = dir
 
             for future in concurrent.futures.as_completed(futures):
@@ -295,7 +295,7 @@ def extract_resample_info(mosaic_img_path):
         }
     return resample_info
 
-def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None, log_file_path=None):
+def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None, log_file_path=None, output_wcs_path=None):
 
     output_dir = filter_dir + '/output_files'
 
@@ -328,7 +328,19 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
         }
 
     resample_config = {}
-    if resample_params:
+    if output_wcs_path:
+        # Shared grid covering every filter (see mosaic_footprint.py). The
+        # custom WCS carries pixel scale, rotation, centre and shape, so
+        # those parameters are not passed separately.
+        resample_config = {
+            'resample': {
+                'kernel':config['res_kernel'],
+                'pixfrac':config['pixfrac'],
+                'output_wcs':output_wcs_path,
+                'in_memory':config['resample_in_memory']
+            }
+        }
+    elif resample_params:
         resample_config = {
             'resample': {
                 'kernel':config['res_kernel'],
@@ -341,7 +353,7 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
                 'in_memory': config['resample_in_memory']
             }
         }
-    if resample_params == None:
+    elif resample_params == None:
         resample_config = {
             'resample': {
                 'kernel':config['res_kernel'],
@@ -442,20 +454,47 @@ if __name__ == "__main__":
         config.get('extract_var_flat')
         ]
     
-    # Process first filter
+    # Choose the reference filter and the output grid.
+    from mosaic_footprint import (
+        read_sregions, footprint_areas, choose_reference_filter, write_union_output_wcs,
+    )
+
     ref_cat = config.get("external_reference", None) or None
     if ref_cat is None:
         log.info('No reference catalog provided, no absolute astrometric fitting performed.')
-    longest_filter = sorted_filters[0]
-    log.info(f'Running stage 3 for the longest-wavelength filter ({longest_filter}) first...')
-    print(f'[Stage3] Longest-wavelength filter: {longest_filter}', flush=True)
 
-    log_long_filter, long_log_path = setup_filter_logger(sorted_filter_dirs[0])
-    stage3(sorted_filter_dirs[0], log_long_filter, target, filter_to_paths[longest_filter], reference_catalog=ref_cat, resample_params=None, config=config, log_file_path=long_log_path)
-    extract_data(sorted_filter_dirs[0], target, extract_settings, log_long_filter)
+    sregions = read_sregions(filter_to_paths)
+    areas = footprint_areas(sregions)
+    for f in sorted_filters:
+        log.info(f'Footprint of {f}: {areas[f]:.2f} arcmin^2 ({len(filter_to_paths[f])} exposures)')
+    ref_filter, ref_reason = choose_reference_filter(config.get('reference_filter', 'auto'), areas, filter_mapping)
+    log.info(f'Reference filter: {ref_filter} ({ref_reason}).')
+    print(f'[Stage3] Reference filter: {ref_filter} ({ref_reason})', flush=True)
+
+    output_wcs_path = None
+    footprint_mode = str(config.get('mosaic_footprint', 'all_filters') or 'all_filters')
+    if footprint_mode == 'all_filters':
+        all_regions = [r for f in sorted_filters for r in sregions[f]]
+        output_wcs_path, grid_shape = write_union_output_wcs(
+            all_regions, filter_to_paths[ref_filter][0],
+            float(config['pixel_scale']), float(config['rotation']),
+            os.path.join(output_base_dir, 'output_wcs.asdf'))
+        msg = f'Output grid: combined footprint of all filters, {grid_shape[1]} x {grid_shape[0]} pixels'
+    else:
+        msg = f'Output grid: footprint of the reference filter {ref_filter}'
+    log.info(msg)
+    print(f'[Stage3] {msg}', flush=True)
+
+    ref_dir = os.path.join(output_base_dir, ref_filter)
+    other_dirs = [d for d in sorted_filter_dirs if d != ref_dir]
+
+    log.info(f'Running stage 3 for the reference filter ({ref_filter}) first...')
+    log_long_filter, long_log_path = setup_filter_logger(ref_dir)
+    stage3(ref_dir, log_long_filter, target, filter_to_paths[ref_filter], reference_catalog=ref_cat, resample_params=None, config=config, log_file_path=long_log_path, output_wcs_path=output_wcs_path)
+    extract_data(ref_dir, target, extract_settings, log_long_filter)
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
-    n_remaining = len(sorted_filter_dirs) - 1
+    n_remaining = len(other_dirs)
     if use_multiprocessing and n_remaining > 0:
         n_workers = min(int(config.get('min_processes', 1)), n_remaining)
         status_msg = (
@@ -467,21 +506,25 @@ if __name__ == "__main__":
     log.info(f'Finished. {status_msg}')
     print(f'[Stage3] {status_msg}', flush=True)
 
-    path_longest = sorted_filter_dirs[0] + '/output_files/'
-    convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
-    long_cat = os.path.join(path_longest, f'{sorted_filters[0]}.csv')
-    long_processed_file = find_i2d_file(path_longest)
-    if long_processed_file is None:
-        raise FileNotFoundError(f"No *_i2d.fits mosaic found in {path_longest}.")
-    long_params = extract_resample_info(long_processed_file)
+    path_ref = ref_dir + '/output_files/'
+    convert_catalog_to_tweakreg_format(path_ref, ref_filter)
+    long_cat = os.path.join(path_ref, f'{ref_filter}.csv')
+    long_params = None
+    if output_wcs_path is None:
+        # Reference-filter footprint mode: every other filter is resampled
+        # onto the grid of the reference mosaic.
+        ref_processed_file = find_i2d_file(path_ref)
+        if ref_processed_file is None:
+            raise FileNotFoundError(f"No *_i2d.fits mosaic found in {path_ref}.")
+        long_params = extract_resample_info(ref_processed_file)
 
     if use_multiprocessing == True:
         log.info('Multiprocessing is being used. Beginning stage 3 for remaining filters...')
-        process_filters_parallel(sorted_filter_dirs[1:], filter_to_paths, target, long_cat, long_params, extract_settings, config=config)
+        process_filters_parallel(other_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config=config, output_wcs_path=output_wcs_path)
 
     else:
-        for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stdout, desc="Processing Filters")):
+        for i,dir in enumerate(tqdm(other_dirs, file=sys.stdout, desc="Processing Filters")):
             log_filter, filter_log_path = setup_filter_logger(dir)
             filter_name = os.path.basename(dir)
-            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=filter_log_path)
+            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=filter_log_path, output_wcs_path=output_wcs_path)
             extract_data(dir, target, extract_settings, log_filter)

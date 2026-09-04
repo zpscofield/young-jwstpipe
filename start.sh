@@ -61,6 +61,11 @@ if [ -n "${SSH_CONNECTION:-}" ]; then
     echo "  the page runs as its own process and keeps going after the UI or"
     echo "  your SSH session ends; run ./start.sh again to check on it."
     echo ""
+    echo "  Coming back later and seeing 'Connecting...'? The run is not lost:"
+    echo "  the port forward died with your SSH session. Re-run the ssh -L"
+    echo "  command above, or use the Network URL Streamlit prints if your"
+    echo "  laptop is on the same network as the server."
+    echo ""
     echo "==========================================================================="
     echo ""
 

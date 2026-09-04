@@ -22,3 +22,6 @@ data/
 # Streamlit state
 .streamlit/secrets.toml
 .streamlit/.*.log
+
+# Detached pipeline run state and log (see utils/pipeline_run.py)
+.pipeline_run/

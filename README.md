@@ -77,6 +77,8 @@ The page is organized top to bottom:
 
 Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
 
+**Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./start.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If the pipeline is running on your own computer, putting it to sleep or shutting it down stops the reduction like any other process.
+
 ### Important notes
 
 **Skipping calibration steps.** The optional steps (**1/f noise correction**, **wisp subtraction**, **background subtraction**) can be safely skipped — they detect existing files and adjust automatically. Skipping them will not cause errors but may affect final mosaic quality.

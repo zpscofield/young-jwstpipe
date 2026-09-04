@@ -25,13 +25,10 @@ from __future__ import annotations
 
 import base64
 import logging
-import re
-import subprocess
 import sys
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
@@ -53,6 +50,7 @@ from color_image import (
 from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
 from pipeline_introspect import jwst_version
 from config_layout import serialize_config
+from pipeline_run import load_run, read_log_tail, start_run, stop_run
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -291,67 +289,70 @@ def _log_panel_html(lines: list[str], max_height_px: int = LOG_PANEL_HEIGHT_PX) 
 </html>"""
 
 
-def run_pipeline_streaming() -> int:
-    """Run young_pipeline.sh and stream its output into the UI. Returns exit code."""
-    with st.status("Running pipeline…", expanded=True, state="running") as status:
-        log_placeholder = st.empty()
-        lines: list[str] = []
+def _fmt_time(when) -> str:
+    return when.strftime("%Y-%m-%d %H:%M:%S")
 
-        process = subprocess.Popen(
-            ["bash", str(PIPELINE_SCRIPT)],
-            cwd=str(REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+
+@st.fragment(run_every=2)
+def _live_run_panel() -> None:
+    """Tail the detached run's log while it is running; refreshes every 2 s."""
+    run = load_run(REPO_ROOT)
+    if run is None or not run.running:
+        # Finished (or vanished) since the last refresh: redraw the whole
+        # page so the Save & Run button re-enables and the final panel shows.
+        st.rerun(scope="app")
+        return
+
+    label = f"Running pipeline… started {_fmt_time(run.started_at)} (pid {run.pid})"
+    with st.status(label, expanded=True, state="running"):
+        st.caption(
+            "This run is detached from the browser. You can close this tab or "
+            "disconnect from the server and it keeps going; reopen the page to "
+            "pick it up again. Full per-stage detail is in <output>/<obs>/logs/."
+        )
+        st.iframe(
+            _log_panel_html(read_log_tail(run.log_path, MAX_LOG_LINES)),
+            height=LOG_PANEL_HEIGHT_PX + 20,
+        )
+        if st.button("Stop pipeline", key="stop_pipeline"):
+            stop_run(REPO_ROOT)
+            st.rerun(scope="app")
+
+
+def _finished_run_panel(run) -> None:
+    """Show the most recent run's outcome and log."""
+    started = _fmt_time(run.started_at)
+    if run.exit_code == 0:
+        label = f"Last pipeline run finished successfully (started {started})."
+        state = "complete"
+    elif run.crashed:
+        label = (
+            f"Last pipeline run (started {started}) ended without recording an "
+            "exit code. The process was killed or the machine restarted."
+        )
+        state = "error"
+    else:
+        label = f"Last pipeline run exited with code {run.exit_code} (started {started})."
+        state = "error"
+    if run.finished_at is not None:
+        label += f" Finished {_fmt_time(run.finished_at)}."
+
+    with st.status(label, expanded=True, state=state):
+        st.iframe(
+            _log_panel_html(read_log_tail(run.log_path, MAX_LOG_LINES)),
+            height=LOG_PANEL_HEIGHT_PX + 20,
         )
 
-        # def _render_log():
-        #     with log_placeholder.container():
-        #         components.html(
-        #             _log_panel_html(lines[-MAX_LOG_LINES:]),
-        #             height=LOG_PANEL_HEIGHT_PX + 20,
-        #         )
-        def _render_log():
-            with log_placeholder.container():
-                st.iframe(
-                    _log_panel_html(lines[-MAX_LOG_LINES:]),
-                    height=LOG_PANEL_HEIGHT_PX + 20,
-                )
 
-        # Detect tqdm-style progress lines (e.g. "  3%|▎         | 1/32 [...]"
-        # or "Processing Filters:  25%|██▌      | 1/4 [...]") so consecutive
-        # updates overwrite each other in the log instead of piling up as
-        # separate lines, the way they would in a real terminal. The `%|`
-        # marker can appear after an optional `desc:` prefix, so we search
-        # anywhere in the line rather than anchoring to the start.
-        tqdm_line = re.compile(r"\d+%\|")
-
-        assert process.stdout is not None
-        for line in process.stdout:
-            stripped = line.rstrip("\n")
-            if lines and tqdm_line.search(stripped) and tqdm_line.search(lines[-1]):
-                lines[-1] = stripped
-            else:
-                lines.append(stripped)
-            _render_log()
-
-        return_code = process.wait()
-
-        if return_code == 0:
-            status.update(label="Pipeline finished successfully.", state="complete")
-        else:
-            status.update(
-                label=f"Pipeline exited with code {return_code}. See log above.",
-                state="error",
-            )
-
-        # Stash the final log so it can be re-rendered on subsequent reruns
-        # (e.g. when the user toggles a widget elsewhere on the page). Without
-        # this the streamed log disappears the moment Streamlit re-executes.
-        st.session_state["last_pipeline_log"] = list(lines[-MAX_LOG_LINES:])
-        st.session_state["last_pipeline_return_code"] = return_code
-        return return_code
+def render_run_panel() -> None:
+    """Live panel if a run is in progress, otherwise the last run's result."""
+    run = load_run(REPO_ROOT)
+    if run is None:
+        return
+    if run.running:
+        _live_run_panel()
+    else:
+        _finished_run_panel(run)
 
 
 def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
@@ -1972,37 +1973,35 @@ for message in warnings:
 for message in errors:
     st.error(message)
 
+current_run = load_run(REPO_ROOT)
+run_in_progress = current_run is not None and current_run.running
+
 left, middle, right = st.columns([1, 1, 3])
 with left:
     if st.button("Save config.yaml"):
         save_config(new_config)
         st.success(f"Saved {CONFIG_PATH}")
 with middle:
-    run_clicked = st.button("Save & Run pipeline ▶", type="primary", disabled=bool(errors))
-with right:
-    st.caption(
-        "Save & Run writes config.yaml, then runs young_pipeline.sh and streams "
-        "its output below. Per-stage detail still lands in <output>/<obs>/logs/."
+    run_clicked = st.button(
+        "Save & Run pipeline ▶",
+        type="primary",
+        disabled=bool(errors) or run_in_progress,
     )
+with right:
+    if run_in_progress:
+        st.caption("A pipeline run is in progress. Stop it below before starting another.")
+    else:
+        st.caption(
+            "Save & Run writes config.yaml, then starts young_pipeline.sh as a "
+            "detached process and shows its log below. The run keeps going if "
+            "you close the browser or disconnect from the server. Per-stage "
+            "detail still lands in <output>/<obs>/logs/."
+        )
 
 # Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
-if run_clicked:
+if run_clicked and not run_in_progress:
     save_config(new_config)
-    st.info(f"Saved {CONFIG_PATH}. Starting pipeline…")
-    run_pipeline_streaming()
-elif "last_pipeline_log" in st.session_state:
-    # Replay the last pipeline log so it survives Streamlit reruns from
-    # unrelated widget interactions. The buttons in the Color Image section
-    # above can refresh the page without erasing this panel.
-    last_rc = st.session_state.get("last_pipeline_return_code", 0)
-    if last_rc == 0:
-        replay_label = "Last pipeline run — finished successfully."
-        replay_state = "complete"
-    else:
-        replay_label = f"Last pipeline run — exited with code {last_rc}."
-        replay_state = "error"
-    with st.status(replay_label, expanded=True, state=replay_state):
-        components.html(
-            _log_panel_html(st.session_state["last_pipeline_log"]),
-            height=LOG_PANEL_HEIGHT_PX + 20,
-        )
+    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+    st.rerun()
+
+render_run_panel()

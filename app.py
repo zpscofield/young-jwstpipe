@@ -2030,28 +2030,29 @@ for message in errors:
 current_run = load_run(REPO_ROOT)
 run_in_progress = current_run is not None and current_run.running
 
-b_save, b_run, b_test, b_reset, b_note = st.columns([1, 1, 1, 1, 2])
-with b_save:
-    if st.button("Save config.yaml"):
-        save_config(new_config)
-        st.success(f"Saved {CONFIG_PATH}")
+st.markdown(
+    "**Check setup** takes a few seconds and processes nothing: it reads the data "
+    "headers, checks the environment, output location, wisp templates, CRDS "
+    "reference files, and the stage 3 grid, and reports problems and warnings. "
+    "**Save & Run pipeline** writes config.yaml, runs the same check, and starts "
+    "the reduction only if it finds no problems (warnings ask you to confirm). "
+    "The run is a detached process: it keeps going if you close the browser or "
+    "disconnect from the server, and its log shows below."
+)
+
+b_check, b_run, b_reset, b_save, b_note = st.columns([1, 1, 1, 1, 2])
+with b_check:
+    check_clicked = st.button(
+        "Check setup",
+        disabled=run_in_progress,
+        help="Save config.yaml and run the setup checks without starting anything.",
+    )
 with b_run:
     run_clicked = st.button(
         "Save & Run pipeline ▶",
         type="primary",
-        disabled=bool(errors) or run_in_progress,
-    )
-with b_test:
-    check_clicked = st.button(
-        "Save & Check setup",
         disabled=run_in_progress,
-        help=(
-            "Takes seconds and processes nothing: checks the Python environment, "
-            "the data and its headers, the observation grouping, the output "
-            "location, wisp templates, which CRDS reference files are missing or "
-            "corrupt (without downloading), the stage 3 grid size, and the "
-            "parallel settings."
-        ),
+        help="Save config.yaml, run the setup checks, and start the reduction if they pass.",
     )
 with b_reset:
     if st.button(
@@ -2062,29 +2063,31 @@ with b_reset:
         CONFIG_PATH.unlink(missing_ok=True)
         st.session_state.clear()
         st.rerun()
+with b_save:
+    if st.button("Save only", help="Write config.yaml without checking or running."):
+        save_config(new_config)
+        st.success(f"Saved {CONFIG_PATH}")
 with b_note:
     if run_in_progress:
         st.caption("A run is in progress. Stop it below before starting another.")
-    else:
-        st.caption(
-            "Save & Run writes config.yaml, then starts young_pipeline.sh as a "
-            "detached process and shows its log below. The run keeps going if "
-            "you close the browser or disconnect from the server. Save & Check "
-            "setup reports problems with the settings, data, and environment "
-            "first, in seconds."
-        )
 
-# Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
-if run_clicked and not run_in_progress:
-    save_config(new_config)
+
+def _start_full_run(config_to_run: dict) -> None:
+    save_config(config_to_run)
     st.session_state.pop("preflight", None)
+    st.session_state.pop("preflight_wants_run", None)
     start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
     st.rerun()
 
-if check_clicked and not run_in_progress:
+
+# Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
+if (check_clicked or run_clicked) and not run_in_progress:
     save_config(new_config)
     with st.spinner("Checking environment, data, CRDS reference files, and settings…"):
         st.session_state["preflight"] = run_preflight(new_config, REPO_ROOT)
+    st.session_state["preflight_wants_run"] = bool(run_clicked)
+    if run_clicked and all(c.status == "ok" for c in st.session_state["preflight"]):
+        _start_full_run(new_config)
 
 if "preflight" in st.session_state and not run_in_progress:
     _checks = st.session_state["preflight"]
@@ -2097,14 +2100,16 @@ if "preflight" in st.session_state and not run_in_progress:
         for c in _checks:
             st.markdown(f"{_icons[c.status]} **{c.name}** — {c.detail}")
         if _n_fail:
-            st.error("Fix the problems above before running.")
-        else:
-            if _n_warn:
+            st.error("Fix the problems above, then check again or press Save & Run pipeline.")
+        elif _n_warn:
+            if st.session_state.get("preflight_wants_run"):
+                st.warning("The run was not started because of the warnings above. Read them, then confirm.")
+            else:
                 st.warning("Warnings do not block the run, but read them first.")
+            if st.button("Run anyway ▶", type="primary", key="run_after_check"):
+                _start_full_run(new_config)
+        else:
             if st.button("Run full pipeline now ▶", type="primary", key="run_after_check"):
-                save_config(new_config)
-                st.session_state.pop("preflight", None)
-                start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
-                st.rerun()
+                _start_full_run(new_config)
 
 render_run_panel(new_config)

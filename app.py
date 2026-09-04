@@ -1565,10 +1565,10 @@ with col_ref:
         help=(
             "The filter processed first. Its source catalog is the astrometric "
             "reference every other filter is aligned to. Automatic picks the "
-            "filter covering the largest area; filters within 5% of the largest "
-            "count as equal and the longest wavelength among them wins, so "
-            "ordinary single-program data still uses the reddest filter. The "
-            "list shows filters found in the data directory."
+            "filter covering the largest sky area, so every other filter has "
+            "reference sources across as much of its footprint as possible; "
+            "the longest wavelength breaks exact ties. The list shows filters "
+            "found in the data directory."
         ),
     )
     new_config["reference_filter"] = "auto" if _ref_choice == _AUTO_REF_LABEL else _ref_choice
@@ -2031,45 +2031,48 @@ current_run = load_run(REPO_ROOT)
 run_in_progress = current_run is not None and current_run.running
 
 st.markdown(
-    "**Check setup** takes a few seconds and processes nothing: it reads the data "
-    "headers, checks the environment, output location, wisp templates, CRDS "
-    "reference files, and the stage 3 grid, and reports problems and warnings. "
+    "**Check setup** takes a few seconds and processes nothing. It reads the data "
+    "headers and checks the environment, output location, wisp templates, CRDS "
+    "reference files, and the stage 3 grid, then reports problems and warnings. "
+    "Do this first, especially with new data or a new machine."
+)
+st.markdown(
     "**Save & Run pipeline** writes config.yaml, runs the same check, and starts "
-    "the reduction only if it finds no problems (warnings ask you to confirm). "
+    "the reduction only if it finds no problems. Warnings show the report and ask "
+    "you to confirm."
+)
+st.markdown(
     "The run is a detached process: it keeps going if you close the browser or "
     "disconnect from the server, and its log shows below."
 )
 
-b_check, b_run, b_reset, b_save, b_note = st.columns([1, 1, 1, 1, 2])
-with b_check:
+with st.container(horizontal=True, gap="small"):
     check_clicked = st.button(
         "Check setup",
         disabled=run_in_progress,
         help="Save config.yaml and run the setup checks without starting anything.",
     )
-with b_run:
     run_clicked = st.button(
         "Save & Run pipeline ▶",
         type="primary",
         disabled=run_in_progress,
         help="Save config.yaml, run the setup checks, and start the reduction if they pass.",
     )
-with b_reset:
-    if st.button(
+    save_clicked = st.button("Save only", help="Write config.yaml without checking or running.")
+    reset_clicked = st.button(
         "Reset to defaults",
         disabled=run_in_progress,
         help=f"Delete {CONFIG_PATH.name} and reload every setting from {DEFAULT_CONFIG_PATH.name}.",
-    ):
-        CONFIG_PATH.unlink(missing_ok=True)
-        st.session_state.clear()
-        st.rerun()
-with b_save:
-    if st.button("Save only", help="Write config.yaml without checking or running."):
-        save_config(new_config)
-        st.success(f"Saved {CONFIG_PATH}")
-with b_note:
-    if run_in_progress:
-        st.caption("A run is in progress. Stop it below before starting another.")
+    )
+if save_clicked:
+    save_config(new_config)
+    st.success(f"Saved {CONFIG_PATH}")
+if reset_clicked:
+    CONFIG_PATH.unlink(missing_ok=True)
+    st.session_state.clear()
+    st.rerun()
+if run_in_progress:
+    st.caption("A run is in progress. Stop it below before starting another.")
 
 
 def _start_full_run(config_to_run: dict) -> None:

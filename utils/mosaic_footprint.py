@@ -24,11 +24,10 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from matplotlib.path import Path as MplPath
 
-# Footprints within this fraction of the largest count as the same size.
-# SW and LW NIRCam channels image the same field but their module layouts
-# differ by a few percent in area, so without a tolerance the automatic
-# choice would flip to a SW filter on every ordinary single-program dataset.
-AREA_TIE_TOLERANCE = 0.05
+# Footprints this close to the largest count as equal; the longest wavelength
+# then wins. Half a percent only absorbs rasterisation noise, so a filter
+# that genuinely covers more sky, even by a few percent, is the reference.
+AREA_TIE_TOLERANCE = 0.005
 
 
 def parse_s_region(s_region: str) -> np.ndarray:
@@ -128,9 +127,8 @@ def choose_reference_filter(
     """Return (filter, reason) for the astrometric/grid reference filter.
 
     ``requested`` is a filter name or "auto". Automatic choice: the largest
-    footprint, with the longest wavelength breaking ties within
-    ``AREA_TIE_TOLERANCE``. An explicit filter that is not present in the
-    data falls back to automatic.
+    footprint, with the longest wavelength breaking (near-exact) ties. An
+    explicit filter that is not present in the data falls back to automatic.
     """
     filters = list(areas)
     if not filters:
@@ -147,15 +145,15 @@ def choose_reference_filter(
     largest = max(areas.values())
     candidates = [f for f in filters if areas[f] >= (1.0 - AREA_TIE_TOLERANCE) * largest]
     chosen = max(candidates, key=lambda f: wavelengths.get(f, 0.0))
-    tol = int(round(AREA_TIE_TOLERANCE * 100))
+    ranked = sorted(filters, key=lambda f: -areas[f])
     if len(candidates) == 1:
-        reason = "largest footprint"
-    elif len(candidates) == len(filters):
-        reason = (f"all footprints are within {tol}% of the largest, which counts as equal "
-                  "coverage, so the longest wavelength")
+        runner_up = next((f for f in ranked if f != chosen), None)
+        reason = f"largest footprint, {areas[chosen]:.1f} arcmin^2"
+        if runner_up is not None:
+            reason += f" vs {areas[runner_up]:.1f} for {runner_up}"
     else:
-        reason = (f"longest wavelength among the filters within {tol}% of the largest footprint "
-                  f"({', '.join(sorted(candidates))})")
+        reason = (f"longest wavelength among the filters with equal footprints "
+                  f"({', '.join(sorted(candidates))}, {areas[chosen]:.1f} arcmin^2)")
     return chosen, fallback_note + reason
 
 

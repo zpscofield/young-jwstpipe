@@ -145,15 +145,10 @@ def choose_reference_filter(
     largest = max(areas.values())
     candidates = [f for f in filters if areas[f] >= (1.0 - AREA_TIE_TOLERANCE) * largest]
     chosen = max(candidates, key=lambda f: wavelengths.get(f, 0.0))
-    ranked = sorted(filters, key=lambda f: -areas[f])
     if len(candidates) == 1:
-        runner_up = next((f for f in ranked if f != chosen), None)
-        reason = f"largest footprint, {areas[chosen]:.1f} arcmin^2"
-        if runner_up is not None:
-            reason += f" vs {areas[runner_up]:.1f} for {runner_up}"
+        reason = "largest footprint"
     else:
-        reason = (f"longest wavelength among the filters with equal footprints "
-                  f"({', '.join(sorted(candidates))}, {areas[chosen]:.1f} arcmin^2)")
+        reason = f"longest wavelength among the filters with equal footprints ({', '.join(sorted(candidates))})"
     return chosen, fallback_note + reason
 
 

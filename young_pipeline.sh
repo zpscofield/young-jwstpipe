@@ -4,6 +4,17 @@ START_TIME_TOTAL=$(date +%s)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CONFIG_FILE="config.yaml"
 
+# --test: run every step on a handful of exposures per filter, writing to
+# <output>/<observation>_test, to check the configuration and environment
+# before committing to a full reduction.
+TEST_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --test) TEST_MODE=true ;;
+        *) echo "[Error] Unknown argument: $arg (only --test is accepted)"; exit 1 ;;
+    esac
+done
+
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[Error] $CONFIG_FILE not found in $(pwd)."
     echo "        The interface (./run.sh) creates it when you save; to run"
@@ -77,16 +88,11 @@ crds_bestrefs_for_uncal_input() {
     shopt -s nullglob
 
     if is_comma_list "$uncal_input"; then
-        # Comma-separated list of files; gather unique parent directories
-        # and glob each one for jw*uncal.fits.
+        # Comma-separated list of files: use exactly those files, so a
+        # test run only fetches references for its subset.
         IFS=',' read -r -a files <<< "$uncal_input"
-        declare -A uniq_dirs
         for f in "${files[@]}"; do
-            [ -n "$f" ] || continue
-            uniq_dirs[$(dirname "$f")]=1
-        done
-        for d in "${!uniq_dirs[@]}"; do
-            uncal_files+=( "$d"/jw*uncal.fits )
+            [ -n "$f" ] && uncal_files+=( "$f" )
         done
     elif [ -d "$uncal_input" ]; then
         uncal_files=( "$uncal_input"/jw*uncal.fits )
@@ -346,7 +352,13 @@ echo "# JWST data reduction pipeline #"
 echo "#                              #"
 echo "################################"
 
-OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR")
+if [ "$TEST_MODE" = true ]; then
+    echo ""
+    echo "TEST RUN: a few exposures per filter, output to <observation>_test"
+    OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR" --test-subset)
+else
+    OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR")
+fi
 
 echo ""
 echo "« Observations found »"
@@ -374,6 +386,10 @@ for line in $OBSERVATIONS; do
     if [[ "$line" == OBS:* ]]; then
         target_name=$(echo "$line" | cut -d':' -f2)
         target_dir=$(echo "$line" | cut -d':' -f3)
+        if [ "$TEST_MODE" = true ]; then
+            n_files=$(echo "$target_dir" | tr ',' '\n' | grep -c .)
+            echo "[$target_name] test subset: $n_files uncal files"
+        fi
         run_pipeline "$target_name" "$target_dir"
     fi
 done

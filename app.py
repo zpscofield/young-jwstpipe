@@ -254,111 +254,124 @@ def validate_config(config: dict) -> tuple[list[str], list[str]]:
 
 LOG_PANEL_HEIGHT_PX = 500
 
+_LOG_PANEL_CSS = """
+<style>
+.pipeline-log {
+  margin: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  padding: 12px;
+  background: #0d1117;
+  color: #d1d9e0;
+  border-radius: 6px;
+  white-space: pre;
+  overflow-x: auto;
+}
+</style>
+"""
 
-def _log_panel_html(lines: list[str], max_height_px: int = LOG_PANEL_HEIGHT_PX) -> str:
+
+def _render_log_lines(lines: list[str]) -> None:
+    """Render log lines as a terminal-style block that updates in place.
+
+    A plain markdown element is diffed by Streamlit on rerun, so the text
+    changes without the element being rebuilt. The previous iframe-based
+    panel reloaded its whole document on every refresh, which flashed dark.
+    """
     body = (
         "\n".join(lines)
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
-    )
-    return f"""<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <style>
-    html, body {{ margin: 0; padding: 0; }}
-    #log {{
-      height: {max_height_px}px;
-      max-height: {max_height_px}px;
-      overflow-y: auto;
-      font-family: ui-monospace, Menlo, Consolas, monospace;
-      font-size: 0.85rem;
-      line-height: 1.45;
-      padding: 12px;
-      background: #0d1117;
-      color: #d1d9e0;
-      border-radius: 6px;
-      white-space: pre;
-      box-sizing: border-box;
-    }}
-  </style>
-</head>
-<body>
-  <pre id="log">{body}</pre>
-  <script>
-    // Auto-scroll to the bottom so the newest line is always visible.
-    const el = document.getElementById('log');
-    if (el) el.scrollTop = el.scrollHeight;
-  </script>
-</body>
-</html>"""
+    ) or " "
+    st.markdown(_LOG_PANEL_CSS + f'<pre class="pipeline-log">{body}</pre>', unsafe_allow_html=True)
 
 
 def _fmt_time(when) -> str:
     return when.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _run_label(run) -> str:
+    return "test run" if run.mode == "test" else "pipeline run"
+
+
 @st.fragment(run_every=2)
-def _live_run_panel() -> None:
-    """Tail the detached run's log while it is running; refreshes every 2 s."""
+def _live_log_panel() -> None:
+    """Refresh the running job's status line and log every 2 s.
+
+    Only this small fragment reruns, so the Stop button and everything else
+    on the page stay put instead of fading in and out with each refresh.
+    """
     run = load_run(REPO_ROOT)
     if run is None or not run.running:
         # Finished (or vanished) since the last refresh: redraw the whole
-        # page so the Save & Run button re-enables and the final panel shows.
+        # page so the buttons re-enable and the final panel shows.
         st.rerun(scope="app")
         return
+    st.markdown(
+        f"⏳ **Running {_run_label(run)}…** started {_fmt_time(run.started_at)} (pid {run.pid})"
+    )
+    with st.container(height=LOG_PANEL_HEIGHT_PX, autoscroll=True):
+        _render_log_lines(read_log_tail(run.log_path, MAX_LOG_LINES))
 
-    label = f"Running pipeline… started {_fmt_time(run.started_at)} (pid {run.pid})"
-    with st.status(label, expanded=True, state="running"):
+
+def _live_run_panel(run) -> None:
+    with st.container(border=True):
+        _live_log_panel()
         st.caption(
             "This run is detached from the browser. You can close this tab or "
             "disconnect from the server and it keeps going; reopen the page to "
             "pick it up again. Full per-stage detail is in <output>/<obs>/logs/."
         )
-        st.iframe(
-            _log_panel_html(read_log_tail(run.log_path, MAX_LOG_LINES)),
-            height=LOG_PANEL_HEIGHT_PX + 20,
-        )
         if st.button("Stop pipeline", key="stop_pipeline"):
             stop_run(REPO_ROOT)
-            st.rerun(scope="app")
+            st.rerun()
 
 
-def _finished_run_panel(run) -> None:
+def _finished_run_panel(run, config_to_run: dict) -> None:
     """Show the most recent run's outcome and log."""
     started = _fmt_time(run.started_at)
+    kind = _run_label(run)
     if run.exit_code == 0:
-        label = f"Last pipeline run finished successfully (started {started})."
+        label = f"Last {kind} finished successfully (started {started})."
         state = "complete"
     elif run.crashed:
         label = (
-            f"Last pipeline run (started {started}) ended without recording an "
+            f"Last {kind} (started {started}) ended without recording an "
             "exit code. The process was killed or the machine restarted."
         )
         state = "error"
     else:
-        label = f"Last pipeline run exited with code {run.exit_code} (started {started})."
+        label = f"Last {kind} exited with code {run.exit_code} (started {started})."
         state = "error"
     if run.finished_at is not None:
         label += f" Finished {_fmt_time(run.finished_at)}."
 
     with st.status(label, expanded=True, state=state):
-        st.iframe(
-            _log_panel_html(read_log_tail(run.log_path, MAX_LOG_LINES)),
-            height=LOG_PANEL_HEIGHT_PX + 20,
-        )
+        if run.mode == "test" and run.exit_code == 0:
+            st.success(
+                "Every step completed on the test subset. Outputs are in "
+                "<output>/<observation>_test. Start the full reduction with "
+                "the current settings?"
+            )
+            if st.button("Run full pipeline now ▶", type="primary", key="run_after_test"):
+                save_config(config_to_run)
+                start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+                st.rerun()
+        with st.container(height=LOG_PANEL_HEIGHT_PX):
+            _render_log_lines(read_log_tail(run.log_path, MAX_LOG_LINES))
 
 
-def render_run_panel() -> None:
+def render_run_panel(config_to_run: dict) -> None:
     """Live panel if a run is in progress, otherwise the last run's result."""
     run = load_run(REPO_ROOT)
     if run is None:
         return
     if run.running:
-        _live_run_panel()
+        _live_run_panel(run)
     else:
-        _finished_run_panel(run)
+        _finished_run_panel(run, config_to_run)
 
 
 def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
@@ -2026,12 +2039,29 @@ for message in errors:
 current_run = load_run(REPO_ROOT)
 run_in_progress = current_run is not None and current_run.running
 
-left, middle, reset, right = st.columns([1, 1, 1, 2])
-with left:
+b_save, b_run, b_test, b_reset, b_note = st.columns([1, 1, 1, 1, 2])
+with b_save:
     if st.button("Save config.yaml"):
         save_config(new_config)
         st.success(f"Saved {CONFIG_PATH}")
-with reset:
+with b_run:
+    run_clicked = st.button(
+        "Save & Run pipeline ▶",
+        type="primary",
+        disabled=bool(errors) or run_in_progress,
+    )
+with b_test:
+    test_clicked = st.button(
+        "Save & Test pipeline",
+        disabled=bool(errors) or run_in_progress,
+        help=(
+            "Run every enabled step on a few exposures per filter (two per "
+            "filter, one short-wavelength detector plus its long-wavelength "
+            "partner) to check the settings and environment before a full "
+            "reduction. Outputs go to <output>/<observation>_test."
+        ),
+    )
+with b_reset:
     if st.button(
         "Reset to defaults",
         disabled=run_in_progress,
@@ -2040,27 +2070,21 @@ with reset:
         CONFIG_PATH.unlink(missing_ok=True)
         st.session_state.clear()
         st.rerun()
-with middle:
-    run_clicked = st.button(
-        "Save & Run pipeline ▶",
-        type="primary",
-        disabled=bool(errors) or run_in_progress,
-    )
-with right:
+with b_note:
     if run_in_progress:
-        st.caption("A pipeline run is in progress. Stop it below before starting another.")
+        st.caption("A run is in progress. Stop it below before starting another.")
     else:
         st.caption(
             "Save & Run writes config.yaml, then starts young_pipeline.sh as a "
             "detached process and shows its log below. The run keeps going if "
-            "you close the browser or disconnect from the server. Per-stage "
-            "detail still lands in <output>/<obs>/logs/."
+            "you close the browser or disconnect from the server. Save & Test "
+            "does the same on a small subset first."
         )
 
 # Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
-if run_clicked and not run_in_progress:
+if (run_clicked or test_clicked) and not run_in_progress:
     save_config(new_config)
-    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH, test_mode=test_clicked)
     st.rerun()
 
-render_run_panel()
+render_run_panel(new_config)

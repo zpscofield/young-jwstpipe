@@ -46,6 +46,7 @@ class RunInfo:
     log_path: Path
     exit_code: int | None
     finished_at: datetime | None
+    mode: str = "full"  # "full" or "test"
 
     @property
     def running(self) -> bool:
@@ -92,6 +93,7 @@ def load_run(repo_root: Path) -> RunInfo | None:
         state = json.loads(state_file.read_text())
         pid = int(state["pid"])
         started_at = datetime.fromisoformat(state["started_at"])
+        mode = str(state.get("mode", "full"))
     except (ValueError, KeyError, json.JSONDecodeError):
         return None
 
@@ -111,11 +113,16 @@ def load_run(repo_root: Path) -> RunInfo | None:
         log_path=d / "pipeline.log",
         exit_code=exit_code,
         finished_at=finished_at,
+        mode=mode,
     )
 
 
-def start_run(repo_root: Path, script_path: Path, config_path: Path) -> RunInfo:
-    """Launch young_pipeline.sh detached and record it. Returns its RunInfo."""
+def start_run(repo_root: Path, script_path: Path, config_path: Path, test_mode: bool = False) -> RunInfo:
+    """Launch young_pipeline.sh detached and record it. Returns its RunInfo.
+
+    With test_mode the script gets --test: a few exposures per filter,
+    outputs under <observation>_test.
+    """
     repo_root = Path(repo_root)
     d = run_dir(repo_root)
     d.mkdir(exist_ok=True)
@@ -131,8 +138,9 @@ def start_run(repo_root: Path, script_path: Path, config_path: Path) -> RunInfo:
     # The wrapper records the script's exit status once it finishes. Writing
     # to a temp name and renaming keeps a half-written file from ever being
     # read as a completed run.
+    script_args = " --test" if test_mode else ""
     wrapper = (
-        f"bash {shlex.quote(str(script_path))}; rc=$?; "
+        f"bash {shlex.quote(str(script_path))}{script_args}; rc=$?; "
         f"echo $rc > {shlex.quote(str(exit_file) + '.tmp')} && "
         f"mv {shlex.quote(str(exit_file) + '.tmp')} {shlex.quote(str(exit_file))}"
     )
@@ -161,6 +169,7 @@ def start_run(repo_root: Path, script_path: Path, config_path: Path) -> RunInfo:
                 "pid": proc.pid,
                 "started_at": started_at.isoformat(timespec="seconds"),
                 "log": str(log_path),
+                "mode": "test" if test_mode else "full",
             },
             indent=2,
         )
@@ -171,6 +180,7 @@ def start_run(repo_root: Path, script_path: Path, config_path: Path) -> RunInfo:
         log_path=log_path,
         exit_code=None,
         finished_at=None,
+        mode="test" if test_mode else "full",
     )
 
 

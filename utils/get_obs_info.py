@@ -28,6 +28,66 @@ def find_uncal_files(data_dir: str):
     return sorted(glob.glob(pattern, recursive=True))
 
 
+# Detectors to prefer for a test run. nrca3 and nrcb4 are the wisp-affected
+# short-wavelength detectors, so a test run exercises the wisp code; each
+# short-wavelength pick is paired with its module's long-wavelength detector
+# because wisp subtraction builds its source mask from the LW image.
+TEST_SW_PREFERENCE = ["nrca3", "nrcb4", "nrca1", "nrca2", "nrca4", "nrcb1", "nrcb2", "nrcb3"]
+
+
+def _read_filter_and_detector(path: str):
+    try:
+        with fits.open(path) as hdul:
+            h = hdul[0].header
+            return safe_str(h.get("FILTER"), "UNKNOWN"), safe_str(h.get("DETECTOR"), "").lower()
+    except Exception:
+        return "UNKNOWN", ""
+
+
+def select_test_subset(files, exposures_per_filter: int = 2):
+    """Pick a small set of uncal files that still exercises every step.
+
+    Groups files by exposure (filename without the detector), keeps the
+    first ``exposures_per_filter`` exposures of every filter, and from each
+    kept exposure takes one preferred SW detector plus its module's LW
+    detector. Two exposures per filter is the minimum for outlier detection
+    and sky matching to do real work in stage 3.
+    """
+    exposures = {}
+    for f in files:
+        base = os.path.basename(f)
+        parts = base.split("_")
+        detector = parts[-2].lower() if len(parts) >= 3 else ""
+        exp_key = "_".join(parts[:-2])
+        filt, det_hdr = _read_filter_and_detector(f)
+        detector = det_hdr or detector
+        exposures.setdefault(exp_key, {})[detector] = (f, filt)
+
+    covered = {}
+    chosen = []
+    for exp_key in sorted(exposures):
+        filters = {filt for _, filt in exposures[exp_key].values()}
+        if any(covered.get(flt, 0) < exposures_per_filter for flt in filters):
+            chosen.append(exp_key)
+            for flt in filters:
+                covered[flt] = covered.get(flt, 0) + 1
+
+    subset = []
+    for exp_key in chosen:
+        dets = exposures[exp_key]
+        sw = next((d for d in TEST_SW_PREFERENCE if d in dets), None)
+        if sw is not None:
+            subset.append(dets[sw][0])
+            lw = f"nrc{sw[3]}long"
+            if lw in dets:
+                subset.append(dets[lw][0])
+        else:
+            lw_dets = sorted(d for d in dets if d.endswith("long"))
+            if lw_dets:
+                subset.append(dets[lw_dets[0]][0])
+    return sorted(set(subset))
+
+
 def get_observation_info(data_dir: str, combine: bool, group_by_directory: bool, name: str):
     """
     Implements user rules:
@@ -100,7 +160,9 @@ def get_observation_info(data_dir: str, combine: bool, group_by_directory: bool,
 
 
 def main():
-    pipeline_dir = sys.argv[1] if len(sys.argv) > 1 else "."
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    test_subset = "--test-subset" in sys.argv[1:]
+    pipeline_dir = args[0] if args else "."
     config_file = os.path.join(pipeline_dir, "config.yaml")
 
     with open(config_file, "r") as f:
@@ -119,7 +181,13 @@ def main():
     )
 
     for obs_name, payload in obs_info:
-        print(f"OBS:{obs_name}:{payload}")
+        if test_subset:
+            # Test runs use a handful of files and keep their outputs apart
+            # from real reductions by adding a _test suffix to the name.
+            subset = select_test_subset(payload.split(","))
+            print(f"OBS:{obs_name}_test:{','.join(subset)}")
+        else:
+            print(f"OBS:{obs_name}:{payload}")
 
     print(f"TARGET_NAMES:{','.join(program_names)}")
 

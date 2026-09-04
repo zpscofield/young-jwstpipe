@@ -6,7 +6,7 @@ CONFIG_FILE="config.yaml"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "[Error] $CONFIG_FILE not found in $(pwd)."
-    echo "        The interface (./start.sh) creates it when you save; to run"
+    echo "        The interface (./run.sh) creates it when you save; to run"
     echo "        without the interface, copy config.default.yaml to config.yaml"
     echo "        and edit the paths."
     exit 1

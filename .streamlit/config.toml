@@ -1,6 +1,5 @@
 [server]
-# Default port. start.sh and share.sh both bind to this.
-# When you run share.sh, headless mode is set explicitly on the command line.
+# Default port. run.sh binds to this and passes headless mode on the command line when needed.
 port = 8501
 
 [browser]

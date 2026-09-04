@@ -1,7 +1,7 @@
 # YOUNG JWST Pipeline default configuration
 #
 # This file is the template and is never written by the pipeline. The
-# interface (./start.sh) loads it the first time, then saves your settings
+# interface (./run.sh) loads it the first time, then saves your settings
 # to config.yaml next to it, which is what young_pipeline.sh reads. To run
 # without the interface, copy this file to config.yaml and edit it.
 # Section headers are regenerated automatically when the file is saved.

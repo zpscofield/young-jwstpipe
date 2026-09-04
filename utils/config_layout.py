@@ -78,7 +78,7 @@ def serialize_config(config: dict) -> str:
     """Return config.yaml text with grouped, commented sections."""
     lines = [
         "# YOUNG JWST Pipeline configuration",
-        "# Edit values below, or configure everything from the UI (./start.sh).",
+        "# Edit values below, or configure everything from the UI (./run.sh).",
         "# Section headers are regenerated automatically when the file is saved.",
         "",
     ]

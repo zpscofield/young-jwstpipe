@@ -27,40 +27,71 @@ A streamlined implementation of the James Webb Space Telescope (JWST) calibratio
 
 ## Installation and Requirements
 
-### 1. Python environment
+The pipeline runs on Linux and macOS (on Windows, use WSL2). Everything it needs comes from one Python environment; there are no other system tools to install.
 
-Create the environment from the provided files. With conda:
+### 1. Before you start
+
+- **git** and either **conda** ([Miniforge](https://github.com/conda-forge/miniforge) is recommended) or **Python 3.11**.
+- **Internet access** from the machine that runs the pipeline. It downloads data from MAST and calibration reference files from CRDS.
+- **Disk space.** Intermediate files from every stage are kept, so a NIRCam program can take hundreds of GB. The CRDS reference cache grows to tens of GB and must be on a **local** drive; a network drive makes Stages 1–3 very slow.
+- **Memory.** Stage 3 builds each mosaic in memory. Large fields at 0.02"/pixel can need tens of GB of RAM.
+
+### 2. Get the code
+
+```bash
+git clone https://github.com/zpscofield/young-jwstpipe.git
+cd young-jwstpipe
+```
+
+### 3. Create the Python environment
+
+With conda (recommended):
 
 ```bash
 conda env create -f environment.yml
 conda activate young-jwstpipe
 ```
 
-Or with pip (into a Python 3.11 environment):
+Or with pip, in a fresh Python 3.11 virtual environment:
 
 ```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-General JWST pipeline installation notes are on the [JWST Calibration Pipeline site](https://jwst-pipeline.readthedocs.io/en/latest/).
+This installs the STScI `jwst` pipeline, `crds`, Streamlit, and everything else the pipeline uses. General notes on the JWST pipeline itself are on the [JWST Calibration Pipeline site](https://jwst-pipeline.readthedocs.io/en/latest/).
 
-### 2. Wisp templates
+### 4. Check the installation
 
-The wisp templates for the wisp-correction step are available at [stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne). Use the version 4 templates. Place the `FITS` files in a folder and point the **WISP templates directory** field at it.
+With the environment activated:
 
-> **Tip:** Have a large directory available — intermediate files for every stage are saved.
+```bash
+python -c "import jwst; print(jwst.__version__)"
+streamlit --version
+```
+
+Both should print a version number.
+
+### 5. CRDS reference files
+
+Calibration reference files are fetched from CRDS automatically during the first run and cached in a directory you choose in the **CRDS** section of the interface. No account is needed. Choose a directory on a local drive and keep using the same one; it is shared by every run.
+
+### 6. Wisp templates
+
+The wisp templates for the wisp-correction step are available at [stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne). Use the version 4 templates. Place the `FITS` files in a folder and point the **WISP templates directory** field at it. If you skip wisp subtraction, you do not need them.
 
 ## Usage
 
 ### Launch the interface
 
 ```bash
-./start.sh
+./run.sh
 ```
 
-On macOS you can also double-click `start.command`. Streamlit opens your browser automatically at `http://localhost:8501`.
+On macOS you can also double-click `run.command`. Streamlit opens your browser automatically at `http://localhost:8501`.
 
-**Running on a remote server over SSH:** `start.sh` detects the SSH session, starts Streamlit headless, and prints the exact `ssh -L 8501:localhost:8501 ...` port-forward command to run on your laptop. (VSCode/Cursor Remote-SSH usually auto-forwards the port and offers an "Open in Browser" popup, in which case you can skip that step.)
+**Running on a remote server over SSH:** `run.sh` detects the SSH session, starts Streamlit headless, and prints the exact `ssh -L 8501:localhost:8501 ...` port-forward command to run on your laptop. (VSCode/Cursor Remote-SSH usually auto-forwards the port and offers an "Open in Browser" popup, in which case you can skip that step.)
 
 ### Configure and run
 
@@ -77,7 +108,7 @@ The page is organized top to bottom:
 
 Settings are loaded from `config.default.yaml` the first time and saved to `config.yaml` next to it, so the shipped defaults are never overwritten; **Reset to defaults** deletes your `config.yaml` and reloads the template. Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
 
-**Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./start.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If you come back and the page shows **Connecting…**, the run is not lost: the SSH port forward died with your session. Re-run the `ssh -L` command that `start.sh` printed (or let VSCode reconnect and re-forward the port), or open the **Network URL** Streamlit printed if your computer is on the same network as the server.
+**Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./run.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If you come back and the page shows **Connecting…**, the run is not lost: the SSH port forward died with your session. Re-run the `ssh -L` command that `run.sh` printed (or let VSCode reconnect and re-forward the port), or open the **Network URL** Streamlit printed if your computer is on the same network as the server.
 
 To keep a dead tunnel from lingering and holding port 8501 on your laptop after it sleeps, add keepalives to `~/.ssh/config` on the laptop; VSCode Remote-SSH uses the same file:
 

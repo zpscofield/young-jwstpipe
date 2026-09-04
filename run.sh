@@ -1,7 +1,7 @@
 #!/bin/bash
 # Launch the YOUNG JWST pipeline UI.
 #
-# Local use: just run ./start.sh (or double-click start.command on macOS).
+# Local use: just run ./run.sh (or double-click run.command on macOS).
 # Streamlit opens your browser automatically.
 #
 # Remote use (you're SSH'd into a server): the script detects the SSH
@@ -59,7 +59,7 @@ if [ -n "${SSH_CONNECTION:-}" ]; then
     echo ""
     echo "  Press Ctrl-C here to stop the UI server. A reduction started from"
     echo "  the page runs as its own process and keeps going after the UI or"
-    echo "  your SSH session ends; run ./start.sh again to check on it."
+    echo "  your SSH session ends; run ./run.sh again to check on it."
     echo ""
     echo "  Coming back later and seeing 'Connecting...'? The run is not lost:"
     echo "  the port forward died with your SSH session. Re-run the ssh -L"

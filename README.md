@@ -77,7 +77,17 @@ The page is organized top to bottom:
 
 Settings are loaded from `config.default.yaml` the first time and saved to `config.yaml` next to it, so the shipped defaults are never overwritten; **Reset to defaults** deletes your `config.yaml` and reloads the template. Click **Save & Run pipeline** to write `config.yaml` and start the run; the log streams live in the page (full per-stage detail is also written to `<output>/<obs>/logs/`).
 
-**Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./start.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If you come back and the page shows **Connecting…**, the run is not lost: the SSH port forward died with your session. Re-run the `ssh -L` command that `start.sh` printed, or open the **Network URL** Streamlit printed if your computer is on the same network as the server. If the pipeline is running on your own computer, putting it to sleep or shutting it down stops the reduction like any other process.
+**Runs survive disconnects.** The pipeline is started as a detached process on the machine running the interface, with its log written to `.pipeline_run/pipeline.log` in the pipeline directory. If you are working on a server, you can close the browser tab, drop the SSH tunnel, or shut your laptop; the reduction keeps going on the server. Reopen the page (running `./start.sh` again if needed) and it reattaches to the run, live or finished. A **Stop pipeline** button ends a run early. If you come back and the page shows **Connecting…**, the run is not lost: the SSH port forward died with your session. Re-run the `ssh -L` command that `start.sh` printed (or let VSCode reconnect and re-forward the port), or open the **Network URL** Streamlit printed if your computer is on the same network as the server.
+
+To keep a dead tunnel from lingering and holding port 8501 on your laptop after it sleeps, add keepalives to `~/.ssh/config` on the laptop; VSCode Remote-SSH uses the same file:
+
+```
+Host *
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
+```
+
+If `localhost:8501` still hangs while the Network URL works, a stale `ssh` process on the laptop is holding the port. Find it with `lsof -nP -iTCP:8501 -sTCP:LISTEN` and kill it; VSCode will reconnect and forward the port again. When working in VSCode, don't also run a manual `ssh -L` tunnel for the same port. If the pipeline is running on your own computer, putting it to sleep or shutting it down stops the reduction like any other process.
 
 ### Important notes
 

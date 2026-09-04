@@ -7,11 +7,13 @@ CONFIG_FILE="config.yaml"
 # --test: run every step on a handful of exposures per filter, writing to
 # <output>/<observation>_test, to check the configuration and environment
 # before committing to a full reduction.
+# --check: run the setup checks (utils/preflight.py) and exit.
 TEST_MODE=false
 for arg in "$@"; do
     case "$arg" in
         --test) TEST_MODE=true ;;
-        *) echo "[Error] Unknown argument: $arg (only --test is accepted)"; exit 1 ;;
+        --check) exec python "$SCRIPT_DIR/utils/preflight.py" "$SCRIPT_DIR" ;;
+        *) echo "[Error] Unknown argument: $arg (accepted: --check, --test)"; exit 1 ;;
     esac
 done
 
@@ -62,6 +64,20 @@ detect_cal_suffix() {
         suffix2=""
     else
         return 1
+    fi
+}
+
+check_step() {
+    # check_step <exit code> <step name>: stop the run when a step fails so
+    # later stages don't run on incomplete inputs and the run's exit status
+    # reflects the failure.
+    local rc=$1
+    local name=$2
+    if [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "[Error] $name failed (exit code $rc). See $OBS_DIR/logs/ for details."
+        echo "[Pipeline stopped]"
+        exit 1
     fi
 }
 
@@ -183,11 +199,13 @@ run_pipeline() {
                 --combined_mode \
                 --input_dir "$UNCAL_PATH" \
                 --output_dir "$OBS_DIR/stage1_output"
+            check_step $? "Stage 1"
         else
             python "$PIPELINE_DIR/utils/pipeline_stage1.py" \
                 --nproc "$STAGE1_NPROC" \
                 --input_dir "$UNCAL_PATH" \
                 --output_dir "$OBS_DIR/stage1_output"
+            check_step $? "Stage 1"
         fi
         echo ""
     else
@@ -200,6 +218,7 @@ run_pipeline() {
         echo "« Downloading references for rate.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         crds bestrefs --files $OBS_DIR/stage1_output/jw*rate.fits --sync-references=1
+        check_step $? "Reference download for rate files"
         echo ""
     else
         echo "[Download rate references skipped]"
@@ -212,6 +231,7 @@ run_pipeline() {
         echo " Pipeline - stage 2 "
         echo "===================="
         python "$PIPELINE_DIR/utils/pipeline_stage2.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
+        check_step $? "Stage 2"
         echo ""
     else
         echo "[Pipeline Stage 2 skipped]"
@@ -222,6 +242,7 @@ run_pipeline() {
         echo "« Subtracting wisps from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         python "$PIPELINE_DIR/utils/subtract_wisp.py" --files $OBS_DIR/stage2_output/jw*cal.fits --wisp_dir "$WISP_DIR" --output_dir "$OBS_DIR/stage2_output" --suffix "_wisp" --nproc "$WISP_NPROC"
+        check_step $? "Wisp subtraction"
         echo ""
     else
         echo "[Wisp subtraction skipped]"
@@ -245,6 +266,7 @@ run_pipeline() {
                 --files "${CFNOISE_INPUTS[@]}" \
                 --output_dir "$OBS_DIR/stage2_output" \
                 --nproc "$CF_NPROC"
+            check_step $? "1/f noise reduction"
         else
             echo "[No cal files found in $OBS_DIR/stage2_output]"
         fi
@@ -270,7 +292,8 @@ run_pipeline() {
             --output_dir "$OBS_DIR/stage2_output" \
             --files $file_pattern \
             --suffix "$suffix2"
-        
+        check_step $? "Background subtraction"
+
         echo ""
 
     else
@@ -286,6 +309,7 @@ run_pipeline() {
             exit 1
         fi
         crds bestrefs --files $file_pattern --sync-references=1
+        check_step $? "Reference download for cal files"
         echo ""
     else
         echo "[Download cal references skipped]"
@@ -302,6 +326,7 @@ run_pipeline() {
             exit 1
         fi
         python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
+        check_step $? "Stage 3"
         echo ""
     else
         echo "[Pipeline Stage 3 skipped]"
@@ -330,6 +355,7 @@ run_pipeline() {
             --gamma "${COLOR_GAMMA:-2.2}" \
             --filter-hues "${COLOR_HUES:-\{\}}" \
             $SKY_FLAG
+        check_step $? "Color image"
         echo ""
     fi
 

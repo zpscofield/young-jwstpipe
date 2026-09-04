@@ -51,6 +51,7 @@ from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
 from pipeline_introspect import jwst_version
 from config_layout import serialize_config
 from pipeline_run import load_run, read_log_tail, start_run, stop_run
+from preflight import run_preflight
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -2041,14 +2042,15 @@ with b_run:
         disabled=bool(errors) or run_in_progress,
     )
 with b_test:
-    test_clicked = st.button(
-        "Save & Test pipeline",
-        disabled=bool(errors) or run_in_progress,
+    check_clicked = st.button(
+        "Save & Check setup",
+        disabled=run_in_progress,
         help=(
-            "Run every enabled step on a few exposures per filter (two per "
-            "filter, one short-wavelength detector plus its long-wavelength "
-            "partner) to check the settings and environment before a full "
-            "reduction. Outputs go to <output>/<observation>_test."
+            "Takes seconds and processes nothing: checks the Python environment, "
+            "the data and its headers, the observation grouping, the output "
+            "location, wisp templates, which CRDS reference files are missing or "
+            "corrupt (without downloading), the stage 3 grid size, and the "
+            "parallel settings."
         ),
     )
 with b_reset:
@@ -2067,14 +2069,42 @@ with b_note:
         st.caption(
             "Save & Run writes config.yaml, then starts young_pipeline.sh as a "
             "detached process and shows its log below. The run keeps going if "
-            "you close the browser or disconnect from the server. Save & Test "
-            "does the same on a small subset first."
+            "you close the browser or disconnect from the server. Save & Check "
+            "setup reports problems with the settings, data, and environment "
+            "first, in seconds."
         )
 
 # Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
-if (run_clicked or test_clicked) and not run_in_progress:
+if run_clicked and not run_in_progress:
     save_config(new_config)
-    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH, test_mode=test_clicked)
+    st.session_state.pop("preflight", None)
+    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
     st.rerun()
+
+if check_clicked and not run_in_progress:
+    save_config(new_config)
+    with st.spinner("Checking environment, data, CRDS reference files, and settings…"):
+        st.session_state["preflight"] = run_preflight(new_config, REPO_ROOT)
+
+if "preflight" in st.session_state and not run_in_progress:
+    _checks = st.session_state["preflight"]
+    _n_fail = sum(c.status == "fail" for c in _checks)
+    _n_warn = sum(c.status == "warn" for c in _checks)
+    _n_ok = len(_checks) - _n_fail - _n_warn
+    _label = f"Setup check: {_n_ok} passed, {_n_warn} warning(s), {_n_fail} problem(s)"
+    with st.status(_label, expanded=True, state="error" if _n_fail else "complete"):
+        _icons = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
+        for c in _checks:
+            st.markdown(f"{_icons[c.status]} **{c.name}** — {c.detail}")
+        if _n_fail:
+            st.error("Fix the problems above before running.")
+        else:
+            if _n_warn:
+                st.warning("Warnings do not block the run, but read them first.")
+            if st.button("Run full pipeline now ▶", type="primary", key="run_after_check"):
+                save_config(new_config)
+                st.session_state.pop("preflight", None)
+                start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+                st.rerun()
 
 render_run_panel(new_config)

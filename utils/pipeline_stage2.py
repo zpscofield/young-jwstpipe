@@ -73,6 +73,9 @@ def process_file(args):
         print(f"Successfully processed {img}")
     except Exception as e:
         log.error(f"Failed to process {img}: {e}")
+        print(f"[Stage2] FAILED {os.path.basename(img)}: {e}", flush=True)
+        return False
+    return True
 
 def main(input_dir, output_dir, nproc, log, log_file_path):
     # Get the list of rate.fits files
@@ -87,13 +90,29 @@ def main(input_dir, output_dir, nproc, log, log_file_path):
         print(f"Output directory created: {output_dir}")
 
     task_args = [(os.path.join(input_dir, img), output_dir, log, log_file_path) for img in rate_list]
-    effective_nproc = min(nproc, len(task_args))
+    if not task_args:
+        msg = f"No *rate.fits files found in {input_dir}."
+        log.error(msg)
+        print(f"[Stage2] {msg}", flush=True)
+        return 1
+
+    results = []
+    effective_nproc = max(1, min(nproc, len(task_args)))
     with Pool(processes=effective_nproc) as pool:
         with tqdm(total=len(task_args), file=sys.stdout) as pbar:
-            for _ in pool.imap_unordered(process_file, task_args):
+            for ok in pool.imap_unordered(process_file, task_args):
+                results.append(ok)
                 pbar.update(1)
 
+    n_failed = sum(1 for ok in results if not ok)
+    if n_failed:
+        msg = f"{n_failed} of {len(results)} exposures failed in stage 2. See {log_file_path}."
+        log.error(msg)
+        print(f"[Stage2] {msg}", flush=True)
+        return 1
+
     log.info("Pipeline completed successfully.")
+    return 0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Stage 2 of the JWST data reduction pipeline.')
@@ -104,4 +123,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     log, log_file_path = setup_logger(args.output_dir)
-    main(args.input_dir, args.output_dir, args.nproc, log, log_file_path)
+    sys.exit(main(args.input_dir, args.output_dir, args.nproc, log, log_file_path))

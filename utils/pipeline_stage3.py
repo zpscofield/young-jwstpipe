@@ -132,9 +132,15 @@ def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, 
         extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
+        print(f"[Stage3] FAILED {os.path.basename(filter_dir)}: {e}", flush=True)
+        return False
+    return True
 
 def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config, output_wcs_path=None):
-    num_workers = min(config['min_processes'], len(filter_dirs))
+    if not filter_dirs:
+        return True
+    num_workers = max(1, min(config['min_processes'], len(filter_dirs)))
+    all_ok = True
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         with tqdm(total=len(filter_dirs), file=sys.stdout, desc="Processing Filters") as pbar:
@@ -148,9 +154,14 @@ def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, lon
                 dir = futures[future]
                 if future.exception():
                     log.error(f"Filter processing failed for {dir}: {future.exception()}")
+                    print(f"[Stage3] FAILED {os.path.basename(dir)}: {future.exception()}", flush=True)
+                    all_ok = False
+                elif future.result() is False:
+                    all_ok = False
                 else:
                     log.info(f"Completed processing for {dir}")
                     pbar.update(1)
+    return all_ok
 
 def find_i2d_file(output_dir):
     """Return the path of the single *_i2d.fits mosaic in output_dir, or None.
@@ -518,9 +529,13 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"No *_i2d.fits mosaic found in {path_ref}.")
         long_params = extract_resample_info(ref_processed_file)
 
-    if use_multiprocessing == True:
+    if not other_dirs:
+        log.info('No other filters to process.')
+    elif use_multiprocessing == True:
         log.info('Multiprocessing is being used. Beginning stage 3 for remaining filters...')
-        process_filters_parallel(other_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config=config, output_wcs_path=output_wcs_path)
+        if not process_filters_parallel(other_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config=config, output_wcs_path=output_wcs_path):
+            print('[Stage3] One or more filters failed. See the per-filter logs in stage3_output/<filter>/.', flush=True)
+            sys.exit(1)
 
     else:
         for i,dir in enumerate(tqdm(other_dirs, file=sys.stdout, desc="Processing Filters")):

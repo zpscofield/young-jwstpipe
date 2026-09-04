@@ -107,6 +107,9 @@ def process_file(args):
             )
     except Exception as e:
         _write_error(log_file, f"Failed to process {img}: {e}")
+        print(f"[Stage1] FAILED {os.path.basename(img)}: {e}", flush=True)
+        return False
+    return True
 
 
 def build_uncal_list(combined_mode: bool, input_dir_or_list: str):
@@ -162,11 +165,12 @@ def main(combined_mode, input_dir, output_dir, nproc, log, log_file_path):
     log.info(f"Host CPU cores detected: {host_cores}")
     log.info(f"Requested nproc: {requested}")
 
+    results = []
     if requested <= 1:
         log.info("Running stage1 sequentially (nproc=1).")
         with tqdm(total=len(task_args), file=sys.stderr) as pbar:
             for a in task_args:
-                process_file(a)
+                results.append(process_file(a))
                 pbar.update(1)
     else:
         effective_nproc = min(requested, len(task_args))
@@ -176,9 +180,16 @@ def main(combined_mode, input_dir, output_dir, nproc, log, log_file_path):
 
         with Pool(processes=effective_nproc) as pool:
             with tqdm(total=len(task_args), file=sys.stdout) as pbar:
-                for _ in pool.imap_unordered(process_file, task_args):
+                for ok in pool.imap_unordered(process_file, task_args):
+                    results.append(ok)
                     pbar.update(1)
 
+    n_failed = sum(1 for ok in results if not ok)
+    if n_failed:
+        msg = f"{n_failed} of {len(results)} exposures failed in stage 1. See {log_file_path}."
+        log.error(msg)
+        print(f"[Stage1] {msg}", flush=True)
+        return 1
     return 0
 
 

@@ -1,23 +1,27 @@
 #!/bin/bash
 START_TIME_TOTAL=$(date +%s)
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CONFIG_FILE="config.yaml"
 
-DATA_DIR_FROM_YAML=$(yq '.data_directory // ""' "$CONFIG_FILE" | tr -d '"')
-DATA_DIR=${DATA_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
-
-OUTPUT_DIR_FROM_YAML=$(yq '.output_directory // ""' "$CONFIG_FILE" | tr -d '"')
-OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
-
+# Read a value from config.yaml. Strings print bare, numbers and booleans
+# print JSON-style, lists print one item per line, dicts print as JSON,
+# and null/missing keys print an empty line. See utils/config_get.py.
 get_yaml_value() {
     local key=$1
-    local file=$2
-    yq .$key $file | tr -d '"'
+    local file=${2:-$CONFIG_FILE}
+    python "$SCRIPT_DIR/utils/config_get.py" "$file" "$key"
 }
+
+DATA_DIR_FROM_YAML=$(get_yaml_value 'data_directory')
+DATA_DIR=${DATA_DIR_FROM_YAML:-$SCRIPT_DIR}
+
+OUTPUT_DIR_FROM_YAML=$(get_yaml_value 'output_directory')
+OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$SCRIPT_DIR}
 
 should_skip_step() {
     local step=$1
-    yq '.skip_steps // [] | .[]' "$CONFIG_FILE" 2>/dev/null | grep -q "$step"
+    get_yaml_value 'skip_steps' | grep -qx "$step"
 }
 
 detect_cal_suffix() {

@@ -44,29 +44,7 @@ pip install -r requirements.txt
 
 General JWST pipeline installation notes are on the [JWST Calibration Pipeline site](https://jwst-pipeline.readthedocs.io/en/latest/).
 
-### 2. Command-line YAML processor (`yq` + `jq`)
-
-The pipeline shell script reads `config.yaml` with [`yq`](https://pypi.org/project/yq/) using `jq`-style filters. This `yq` is a thin wrapper around [`jq`](https://stedolan.github.io/jq/), so **both** must be installed.
-
-`jq` is a system binary and is installed differently from Python packages:
-
-```bash
-# Linux (Debian/Ubuntu)
-sudo apt install jq
-
-# macOS (Homebrew)
-brew install jq
-```
-
-Then install `yq` (the Python wrapper) into your environment:
-
-```bash
-pip install yq
-```
-
-> Verify with `jq --version` and `yq --version`. If `yq` errors about `jq` not being found, `jq` is not installed or not on your `PATH`.
-
-### 3. Wisp templates
+### 2. Wisp templates
 
 The wisp templates for the wisp-correction step are available at [stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne). Use the version 4 templates. Place the `FITS` files in a folder and point the **WISP templates directory** field at it.
 

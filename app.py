@@ -254,30 +254,20 @@ def validate_config(config: dict) -> tuple[list[str], list[str]]:
 
 LOG_PANEL_HEIGHT_PX = 500
 
-_LOG_PANEL_CSS = """
-<style>
-.pipeline-log {
-  margin: 0;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-  line-height: 1.45;
-  padding: 12px;
-  background: #0d1117;
-  color: #d1d9e0;
-  border-radius: 6px;
-  white-space: pre;
-  overflow-x: auto;
-}
-</style>
-"""
+_LOG_PANEL_STYLE = (
+    "margin:0; font-family: ui-monospace, Menlo, Consolas, monospace; "
+    "font-size:0.85rem; line-height:1.45; padding:12px; background:#0d1117; "
+    "color:#d1d9e0; border-radius:6px; white-space:pre; overflow-x:auto;"
+)
 
 
 def _render_log_lines(lines: list[str]) -> None:
     """Render log lines as a terminal-style block that updates in place.
 
-    A plain markdown element is diffed by Streamlit on rerun, so the text
-    changes without the element being rebuilt. The previous iframe-based
-    panel reloaded its whole document on every refresh, which flashed dark.
+    st.html inserts the block verbatim, so newlines survive (markdown would
+    collapse them into one paragraph) and Streamlit diffs the element on
+    rerun instead of rebuilding it, unlike the earlier iframe panel, which
+    reloaded and flashed dark on every refresh.
     """
     body = (
         "\n".join(lines)
@@ -285,7 +275,7 @@ def _render_log_lines(lines: list[str]) -> None:
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     ) or " "
-    st.markdown(_LOG_PANEL_CSS + f'<pre class="pipeline-log">{body}</pre>', unsafe_allow_html=True)
+    st.html(f'<pre style="{_LOG_PANEL_STYLE}">{body}</pre>')
 
 
 def _fmt_time(when) -> str:

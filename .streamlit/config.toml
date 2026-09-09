@@ -1,0 +1,7 @@
+[server]
+# Default port. run.sh binds to this and passes headless mode on the command line when needed.
+port = 8501
+
+[browser]
+# Don't phone home with usage stats.
+gatherUsageStats = false

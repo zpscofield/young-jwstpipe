@@ -3,22 +3,43 @@ import subprocess
 from multiprocessing import current_process
 import json
 import yaml
-import shutil
 import numpy as np
 from jwst.pipeline import Image3Pipeline
 from astropy.io import fits
 from tqdm.auto import tqdm
+from glob import glob
 import logging
 import sys
 import argparse
 import concurrent.futures
-import psutil
-import time
+from contextlib import contextmanager
+
+from log_utils import archive_existing_log
+
+
+@contextmanager
+def redirect_output_to_file(log_file):
+    """Temporarily redirect stdout and stderr to a log file at the FD level.
+
+    This catches output written directly to C-level stdout/stderr by stpipe
+    and CRDS, which the Python logging module cannot intercept.
+    """
+    log_fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    try:
+        os.dup2(log_fd, 1)
+        os.dup2(log_fd, 2)
+        yield
+    finally:
+        os.dup2(stdout_fd, 1)
+        os.dup2(stderr_fd, 2)
+        os.close(log_fd)
 
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
-os.environ['CRDS_PATH'] = config['crds_path']
+os.environ['CRDS_PATH'] = os.path.expanduser(str(config['crds_path']))
 os.environ['CRDS_SERVER_URL'] = config['crds_server_url']
 
 def setup_logger(output_dir):
@@ -27,7 +48,8 @@ def setup_logger(output_dir):
     """
     parent_dir = os.path.dirname(output_dir)
     log_file_path = os.path.join(parent_dir, "logs/pipeline_stage3.log")
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    archive_existing_log(log_file_path)
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log = logging.getLogger(__name__)
@@ -61,6 +83,11 @@ def setup_logger(output_dir):
         log_file.write("\n------------------\n")
         log_file.write("Stage 3 Processing\n")
         log_file.write("------------------\n\n")
+        log_file.write(
+            "Detailed Stage 3 output (CRDS, stpipe, per-step processing) is "
+            "written to the per-filter logs named 'stage3_<FILTER>.log' inside "
+            "each filter's output directory.\n\n"
+        )
 
     return log, log_file_path
 
@@ -96,38 +123,64 @@ def setup_filter_logger(filter_dir):
         for handler in logger.handlers:
             if isinstance(handler, logging.StreamHandler):
                 logger.removeHandler(handler)
-    return log_filter
+    return log_filter, log_file_path
 
-def process_filter(filter_dir, log, target, long_cat, long_params, extract_settings, config):
-    log_filter = setup_filter_logger(filter_dir)
+def process_filter(filter_dir, input_paths, log, target, long_cat, long_params, extract_settings, config, output_wcs_path=None):
+    log_filter, log_file_path = setup_filter_logger(filter_dir)
     try:
-        stage3(filter_dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+        stage3(filter_dir, log_filter, target, input_paths, reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=log_file_path, output_wcs_path=output_wcs_path)
         extract_data(filter_dir, target, extract_settings, log_filter)
     except Exception as e:
         log.error(f"Error processing filter {filter_dir}: {e}")
+        print(f"[Stage3] FAILED {os.path.basename(filter_dir)}: {e}", flush=True)
+        return False
+    return True
 
-def process_filters_parallel(filter_dirs, target, long_cat, long_params, extract_settings, config):
-    num_workers = min(config['min_processes'], len(filter_dirs))
+def process_filters_parallel(filter_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config, output_wcs_path=None):
+    if not filter_dirs:
+        return True
+    num_workers = max(1, min(config['min_processes'], len(filter_dirs)))
+    all_ok = True
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
         with tqdm(total=len(filter_dirs), file=sys.stdout, desc="Processing Filters") as pbar:
             futures = {}
             for dir in filter_dirs:
-                future = executor.submit(process_filter, dir, log, target, long_cat, long_params, extract_settings, config)
+                filter_name = os.path.basename(dir)
+                future = executor.submit(process_filter, dir, filter_to_paths[filter_name], log, target, long_cat, long_params, extract_settings, config, output_wcs_path)
                 futures[future] = dir
 
             for future in concurrent.futures.as_completed(futures):
                 dir = futures[future]
                 if future.exception():
                     log.error(f"Filter processing failed for {dir}: {future.exception()}")
+                    print(f"[Stage3] FAILED {os.path.basename(dir)}: {future.exception()}", flush=True)
+                    all_ok = False
+                elif future.result() is False:
+                    all_ok = False
                 else:
                     log.info(f"Completed processing for {dir}")
                     pbar.update(1)
+    return all_ok
+
+def find_i2d_file(output_dir):
+    """Return the path of the single *_i2d.fits mosaic in output_dir, or None.
+
+    stpipe derives the output filename from the ASN product name but
+    truncates it at the last dot, so a target like 'PLCKG287+32.9' yields
+    'PLCKG287+32_i2d.fits'. The name therefore cannot be reconstructed from
+    the target; glob for it instead. Each filter's output_files directory
+    holds exactly one mosaic, so the match is unambiguous.
+    """
+    matches = sorted(glob(os.path.join(output_dir, '*_i2d.fits')))
+    return matches[0] if matches else None
 
 def extract_data(filter_dir, target, extract_settings, log):
     suffixes = ['sci', 'err', 'con', 'wht', 'var_poisson', 'var_rnoise', 'var_flat']
     output_dir = filter_dir + '/output_files'
-    processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
+    processed_file = find_i2d_file(output_dir)
+    if processed_file is None:
+        raise FileNotFoundError(f"No *_i2d.fits mosaic found in {output_dir}.")
     log.info(f"Extracting requested data from {os.path.basename(filter_dir)} i2d file...")
     for i in range(len(extract_settings)):
         if extract_settings[i]:
@@ -144,55 +197,61 @@ def extract_data(filter_dir, target, extract_settings, log):
 
 def get_filter_from_exposure(exp):
     header = fits.getheader(exp, ext=0)
-    return header['FILTER']
+    return header.get('FILTER')
 
-def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix="_cal"):
+def organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=""):
     """
-    Organize exposures by filter, given a suffix like '_cfnoise', '_wisp', or '_cal'.
+    Group exposures by filter (read from the FILTER header). Returns a
+    dict {filter_name: [absolute_path, ...]} and creates an empty
+    per-filter directory under output_base_dir for each filter found.
+
+    Files are NOT moved or copied; the ASN file generated later will
+    reference them by absolute path so stage 3 can read them in place.
     """
-    files = [file for file in os.listdir(input_dir) if file.endswith(f'{suffix}.fits')]
-    
+    # Match 'cal{suffix}.fits' rather than bare '{suffix}.fits' so diagnostic
+    # products in the same directory (*_wisp_model.fits, *_cfnoise_model.fits)
+    # can never be picked up as science exposures, even with an empty suffix.
+    files = [file for file in os.listdir(input_dir) if file.endswith(f'cal{suffix}.fits')]
+
     if not files:
-        log.info(f"No '*{suffix}.fits' files found in the input directory. Exiting function.")
-        return
-    
+        log.info(f"No '*cal{suffix}.fits' files found in the input directory. Exiting function.")
+        return {}
+
+    filter_to_paths = {}
     for filename in files:
-        full_path = os.path.join(input_dir, filename)
-        if os.path.isfile(full_path):
-            filter = get_filter_from_exposure(full_path)
-            filter_dir = os.path.join(output_base_dir, filter)
-            new_filename = filename.replace(f'{suffix}.fits', '.fits')
-            if not os.path.exists(filter_dir):
-                os.makedirs(filter_dir)
-            new_full_path = os.path.join(filter_dir, new_filename)
-            shutil.move(full_path, new_full_path)
+        full_path = os.path.abspath(os.path.join(input_dir, filename))
+        if not os.path.isfile(full_path):
+            continue
+        filter_name = get_filter_from_exposure(full_path)
+        if filter_name is None:
+            log.warning(f"Skipping {filename}: no FILTER keyword in the primary header.")
+            continue
+        filter_to_paths.setdefault(filter_name, []).append(full_path)
+
+    for filter_name in filter_to_paths:
+        filter_dir = os.path.join(output_base_dir, filter_name)
+        os.makedirs(filter_dir, exist_ok=True)
+
+    return filter_to_paths
 
 
-def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, pupil="clear", subarray="full", exp_type="nrc_image"):
+def create_custom_association(filter_dir, output_filename, program, target, instrument, filter, input_paths, pupil="clear", subarray="full", exp_type="nrc_image"):
     """
-    Creates a single custom association file with specified metadata, including all exposures in the directory.
+    Creates a single custom association file with specified metadata.
 
-    :param directory: The directory containing the FITS files.
-    :param output_filename: The path to save the association JSON file.
-    :param program: The program ID.
-    :param target: The target ID.
-    :param instrument: The instrument used.
-    :param filter: The filter used.
-    :param pupil: The pupil setting (default "clear").
-    :param subarray: The subarray setting (default "full").
-    :param exp_type: The exposure type (default "nrc_image").
+    input_paths is the list of exposure paths (absolute, in stage2_output)
+    that will be referenced by the ASN. Files are not copied; the JWST
+    Image3Pipeline reads them from their original location.
     """
-    members = []
-
-    for file in os.listdir(filter_dir):
-        if file.endswith('.fits'):
-            # Assuming all files should be included as science exposures
-            members.append({
-                "expname": file,
-                "exptype": "science",
-                "exposerr": None,
-                "asn_candidate": "(custom, observation)"
-            })
+    members = [
+        {
+            "expname": path,
+            "exptype": "science",
+            "exposerr": None,
+            "asn_candidate": "(custom, observation)",
+        }
+        for path in input_paths
+    ]
 
     association = {
         "asn_type": "image3",
@@ -226,7 +285,9 @@ def create_custom_association(filter_dir, output_filename, program, target, inst
 def convert_catalog_to_tweakreg_format(folder_name, filter):
     folder_path = os.path.join(os.getcwd(), folder_name)
     
-    awk_command = f"awk '{{print $4 \",\" $5}}' {folder_path}/*nircam_clear-{filter}_cat.ecsv > {folder_path}/{filter}.tmp"
+    # The catalog shares the mosaic's stpipe-derived stem, which is truncated
+    # at the last dot of the target name, so match any *_cat.ecsv here.
+    awk_command = f"awk '{{print $4 \",\" $5}}' {folder_path}/*_cat.ecsv > {folder_path}/{filter}.tmp"
     os.system(awk_command)
     os.system(f"tail -n +270 {folder_path}/{filter}.tmp > {folder_path}/{filter}.tmp2")
     os.system(f"echo 'RA,DEC' > {folder_path}/{filter}.csv")
@@ -245,12 +306,11 @@ def extract_resample_info(mosaic_img_path):
         }
     return resample_info
 
-def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None, config=None):
+def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resample_params=None, config=None, log_file_path=None, output_wcs_path=None):
 
     output_dir = filter_dir + '/output_files'
 
-    processed_file = os.path.join(output_dir, f'{target}_nircam_clear-{os.path.basename(filter_dir)}_i2d.fits')
-    if os.path.exists(processed_file):
+    if find_i2d_file(output_dir):
         log.info(f"Skipping processing for {filter_dir} as output already exists.")
         return
     
@@ -279,7 +339,19 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
         }
 
     resample_config = {}
-    if resample_params:
+    if output_wcs_path:
+        # Shared grid covering every filter (see mosaic_footprint.py). The
+        # custom WCS carries pixel scale, rotation, centre and shape, so
+        # those parameters are not passed separately.
+        resample_config = {
+            'resample': {
+                'kernel':config['res_kernel'],
+                'pixfrac':config['pixfrac'],
+                'output_wcs':output_wcs_path,
+                'in_memory':config['resample_in_memory']
+            }
+        }
+    elif resample_params:
         resample_config = {
             'resample': {
                 'kernel':config['res_kernel'],
@@ -292,7 +364,7 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
                 'in_memory': config['resample_in_memory']
             }
         }
-    if resample_params == None:
+    elif resample_params == None:
         resample_config = {
             'resample': {
                 'kernel':config['res_kernel'],
@@ -325,29 +397,39 @@ def stage3(filter_dir, log, target, reference_catalog=None, resample_params=None
 
     step_config = {**tweakreg_config, **resample_config, **outlier_config, **skymatch_config, **source_cat_config}
 
+    # Deep-merge any guided per-step overrides from the UI on top of the
+    # curated stage-3 config above. Absent => unchanged behaviour.
+    for _step, _params in (config.get('stage3_step_overrides') or {}).items():
+        step_config.setdefault(_step, {}).update(_params or {})
+
     filter = os.path.basename(filter_dir)
     if config.get('combine_observations') == True:
         program = "00000"
     else:
-        fits_files = [f for f in os.listdir(filter_dir) if f.endswith('.fits')]
-        header = fits.getheader(os.path.join(filter_dir, fits_files[0]), ext=0)
+        header = fits.getheader(input_paths[0], ext=0)
         program = header['PROGRAM']
     instrument = "nircam"
     output_filename = filter_dir + '/' + filter + '_asn.json'
 
-    create_custom_association(filter_dir, output_filename, program, target, instrument, filter)
+    create_custom_association(filter_dir, output_filename, program, target, instrument, filter, input_paths)
 
     asn_list = [os.path.join(filter_dir, file) for file in os.listdir(filter_dir) if file.endswith('asn.json')]
     asn = asn_list[0]
 
-    result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
+    if log_file_path:
+        with redirect_output_to_file(log_file_path):
+            result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
+    else:
+        result = Image3Pipeline.call(asn, steps=step_config, output_dir=output_dir, save_results=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Stage 1 of the JWST data reduction pipeline.')
     parser.add_argument('--output_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--input_dir', type=str, help='Directory where output will be written')
     parser.add_argument('--target', type=str, help='Target name')
-    parser.add_argument('--input_suffix', type=str, default="_cal", help='Suffix of the input cal files')
+    parser.add_argument('--input_suffix', type=str, default="",
+                        help="Suffix after 'cal' in the input filenames, e.g. '_cfnoise' "
+                             "for *_cal_cfnoise.fits. Empty selects plain *_cal.fits.")
 
     args = parser.parse_args()
 
@@ -359,18 +441,17 @@ if __name__ == "__main__":
     if not os.path.exists(output_base_dir):
         os.makedirs(output_base_dir)
 
-    filter_mapping = {
-        'F070W': 0.7, 'F090W': 0.9, 'F115W': 1.15, 'F140M': 1.41, 'F150W': 1.5,
-        'F162M': 1.63, 'F164N': 1.65, 'F150W2': 1.69, 'F182M': 1.85, 'F187N': 1.87, 'F200W': 2.0,
-        'F210M': 2.1, 'F212N': 2.12, 'F250M': 2.5, 'F277W': 2.78, 'F300M': 3.0,
-        'F323N': 3.24, 'F322W2': 3.25, 'F335M': 3.36, 'F356W': 3.57, 'F360M': 3.62,
-        'F405N': 4.05, 'F410M': 4.08, 'F430M': 4.28, 'F444W': 4.40, 'F460M': 4.63,
-        'F466N': 4.65, 'F470N': 4.71, 'F480M': 4.81,
-    }
+    from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM as filter_mapping
 
-    organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
-    filter_dirs = [os.path.join(output_base_dir, d) for d in os.listdir(output_base_dir) if os.path.isdir(os.path.join(output_base_dir, d))]
-    filter_names = [os.path.basename(d) for d in filter_dirs]
+    filter_to_paths = organize_exposures_by_filter(input_dir, output_base_dir, log, suffix=args.input_suffix)
+    if not filter_to_paths:
+        msg = (f"No usable '*cal{args.input_suffix}.fits' exposures found in {input_dir}. "
+               "Check --input_suffix against the files in the stage 2 output directory.")
+        log.error(msg)
+        print(f'[Stage3] Error: {msg}', flush=True)
+        sys.exit(1)
+    filter_names = list(filter_to_paths.keys())
+    filter_dirs = [os.path.join(output_base_dir, f) for f in filter_names]
     sorted_filters = sorted(filter_names, key=lambda x: filter_mapping[x], reverse=True)
     sorted_filter_dirs = [os.path.join(output_base_dir, f) for f in sorted_filters]
 
@@ -384,38 +465,81 @@ if __name__ == "__main__":
         config.get('extract_var_flat')
         ]
     
-    # Process first filter
+    # Choose the reference filter and the output grid.
+    from mosaic_footprint import (
+        read_sregions, footprint_areas, choose_reference_filter, write_union_output_wcs,
+    )
+
     ref_cat = config.get("external_reference", None) or None
     if ref_cat is None:
         log.info('No reference catalog provided, no absolute astrometric fitting performed.')
-    log.info('Running stage 3 for the longest wavelength first...')
-    print('Running stage 3 for the longest wavelength first...')
 
-    log_long_filter = setup_filter_logger(sorted_filter_dirs[0])
-    stage3(sorted_filter_dirs[0], log_long_filter, target, reference_catalog=ref_cat, resample_params=None, config=config)
-    extract_data(sorted_filter_dirs[0], target, extract_settings, log_long_filter)
+    sregions = read_sregions(filter_to_paths)
+    areas = footprint_areas(sregions)
+    for f in sorted_filters:
+        log.info(f'Footprint of {f}: {areas[f]:.2f} arcmin^2 ({len(filter_to_paths[f])} exposures)')
+    ref_filter, ref_reason = choose_reference_filter(config.get('reference_filter', 'auto'), areas, filter_mapping)
+    log.info(f'Reference filter: {ref_filter} ({ref_reason}).')
+    print(f'[Stage3] Reference filter: {ref_filter} ({ref_reason})', flush=True)
+
+    output_wcs_path = None
+    footprint_mode = str(config.get('mosaic_footprint', 'all_filters') or 'all_filters')
+    if footprint_mode == 'all_filters':
+        all_regions = [r for f in sorted_filters for r in sregions[f]]
+        output_wcs_path, grid_shape = write_union_output_wcs(
+            all_regions, filter_to_paths[ref_filter][0],
+            float(config['pixel_scale']), float(config['rotation']),
+            os.path.join(output_base_dir, 'output_wcs.asdf'))
+        msg = f'Output grid: combined footprint of all filters, {grid_shape[1]} x {grid_shape[0]} pixels'
+    else:
+        msg = f'Output grid: footprint of the reference filter {ref_filter}'
+    log.info(msg)
+    print(f'[Stage3] {msg}', flush=True)
+
+    ref_dir = os.path.join(output_base_dir, ref_filter)
+    other_dirs = [d for d in sorted_filter_dirs if d != ref_dir]
+
+    log.info(f'Running stage 3 for the reference filter ({ref_filter}) first...')
+    log_long_filter, long_log_path = setup_filter_logger(ref_dir)
+    stage3(ref_dir, log_long_filter, target, filter_to_paths[ref_filter], reference_catalog=ref_cat, resample_params=None, config=config, log_file_path=long_log_path, output_wcs_path=output_wcs_path)
+    extract_data(ref_dir, target, extract_settings, log_long_filter)
 
     use_multiprocessing = config.get('stage3_use_multiprocessing', False)
-    if use_multiprocessing == True:
-        print('Finished. Starting stage 3 processing for remaining filters with multiprocessing.')
-        log.info('Finished. Starting stage 3 processing for remaining filters with multiprocessing.')
+    n_remaining = len(other_dirs)
+    if use_multiprocessing and n_remaining > 0:
+        n_workers = min(int(config.get('min_processes', 1)), n_remaining)
+        status_msg = (
+            f'Processing {n_remaining} other filter(s) in parallel '
+            f'with {n_workers} process(es).'
+        )
     else:
-        print('Finished. Starting stage 3 processing for remaining filters in series.')
-        log.info('Finished. Starting stage 3 processing for remaining filters in series.')
+        status_msg = f'Processing {n_remaining} other filter(s) in series.'
+    log.info(f'Finished. {status_msg}')
+    print(f'[Stage3] {status_msg}', flush=True)
 
-    path_longest = sorted_filter_dirs[0] + '/output_files/'
-    convert_catalog_to_tweakreg_format(path_longest, sorted_filters[0])
-    long_cat = os.path.join(path_longest, f'{sorted_filters[0]}.csv')
-    long_list = [file for file in os.listdir(path_longest) if file.endswith(f'nircam_clear-{sorted_filters[0]}_i2d.fits')]
-    long_processed_file = os.path.join(path_longest, long_list[0])
-    long_params = extract_resample_info(long_processed_file)
+    path_ref = ref_dir + '/output_files/'
+    convert_catalog_to_tweakreg_format(path_ref, ref_filter)
+    long_cat = os.path.join(path_ref, f'{ref_filter}.csv')
+    long_params = None
+    if output_wcs_path is None:
+        # Reference-filter footprint mode: every other filter is resampled
+        # onto the grid of the reference mosaic.
+        ref_processed_file = find_i2d_file(path_ref)
+        if ref_processed_file is None:
+            raise FileNotFoundError(f"No *_i2d.fits mosaic found in {path_ref}.")
+        long_params = extract_resample_info(ref_processed_file)
 
-    if use_multiprocessing == True:
+    if not other_dirs:
+        log.info('No other filters to process.')
+    elif use_multiprocessing == True:
         log.info('Multiprocessing is being used. Beginning stage 3 for remaining filters...')
-        process_filters_parallel(sorted_filter_dirs[1:], target, long_cat, long_params, extract_settings, config=config)
+        if not process_filters_parallel(other_dirs, filter_to_paths, target, long_cat, long_params, extract_settings, config=config, output_wcs_path=output_wcs_path):
+            print('[Stage3] One or more filters failed. See the per-filter logs in stage3_output/<filter>/.', flush=True)
+            sys.exit(1)
 
     else:
-        for i,dir in enumerate(tqdm(sorted_filter_dirs[1:], file=sys.stderr)):
-            log_filter = setup_filter_logger(dir)
-            stage3(dir, log_filter, target, reference_catalog=long_cat, resample_params=long_params, config=config)
+        for i,dir in enumerate(tqdm(other_dirs, file=sys.stdout, desc="Processing Filters")):
+            log_filter, filter_log_path = setup_filter_logger(dir)
+            filter_name = os.path.basename(dir)
+            stage3(dir, log_filter, target, filter_to_paths[filter_name], reference_catalog=long_cat, resample_params=long_params, config=config, log_file_path=filter_log_path, output_wcs_path=output_wcs_path)
             extract_data(dir, target, extract_settings, log_filter)

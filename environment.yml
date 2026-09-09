@@ -1,0 +1,19 @@
+name: young-jwstpipe
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - astropy
+  - astroquery
+  - matplotlib
+  - numpy
+  - pillow
+  - pyyaml
+  - requests
+  - scipy
+  - tqdm
+  - pip
+  - pip:
+      - jwst
+      - photutils
+      - streamlit

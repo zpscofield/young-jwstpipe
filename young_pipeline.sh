@@ -1,23 +1,84 @@
 #!/bin/bash
 START_TIME_TOTAL=$(date +%s)
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CONFIG_FILE="config.yaml"
 
-DATA_DIR_FROM_YAML=$(yq '.data_directory // ""' "$CONFIG_FILE" | tr -d '"')
-DATA_DIR=${DATA_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
+# --test: run every step on a handful of exposures per filter, writing to
+# <output>/<observation>_test, to check the configuration and environment
+# before committing to a full reduction.
+# --check: run the setup checks (utils/preflight.py) and exit.
+TEST_MODE=false
+for arg in "$@"; do
+    case "$arg" in
+        --test) TEST_MODE=true ;;
+        --check) exec python "$SCRIPT_DIR/utils/preflight.py" "$SCRIPT_DIR" ;;
+        *) echo "[Error] Unknown argument: $arg (accepted: --check, --test)"; exit 1 ;;
+    esac
+done
 
-OUTPUT_DIR_FROM_YAML=$(yq '.output_directory // ""' "$CONFIG_FILE" | tr -d '"')
-OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$(dirname "$(realpath "$0")")}
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "[Error] $CONFIG_FILE not found in $(pwd)."
+    echo "        The interface (./run.sh) creates it when you save; to run"
+    echo "        without the interface, copy config.default.yaml to config.yaml"
+    echo "        and edit the paths."
+    exit 1
+fi
 
+# Read a value from config.yaml. Strings print bare, numbers and booleans
+# print JSON-style, lists print one item per line, dicts print as JSON,
+# and null/missing keys print an empty line. See utils/config_get.py.
 get_yaml_value() {
     local key=$1
-    local file=$2
-    yq .$key $file | tr -d '"'
+    local file=${2:-$CONFIG_FILE}
+    python "$SCRIPT_DIR/utils/config_get.py" "$file" "$key"
 }
+
+DATA_DIR_FROM_YAML=$(get_yaml_value 'data_directory')
+DATA_DIR=${DATA_DIR_FROM_YAML:-$SCRIPT_DIR}
+
+OUTPUT_DIR_FROM_YAML=$(get_yaml_value 'output_directory')
+OUTPUT_DIR=${OUTPUT_DIR_FROM_YAML:-$SCRIPT_DIR}
 
 should_skip_step() {
     local step=$1
-    yq '.skip_steps // [] | .[]' "$CONFIG_FILE" 2>/dev/null | grep -q "$step"
+    get_yaml_value 'skip_steps' | grep -qx "$step"
+}
+
+detect_cal_suffix() {
+    # Find the most-processed flavor of cal files in stage2_output and set
+    # file_pattern/suffix2 accordingly. Every step that consumes cal files
+    # (background subtraction, reference download, stage 3) calls this
+    # itself, so skipping one step never leaves suffix2 unset for the next.
+    if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
+        echo "[Detected *_cal_cfnoise.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
+        suffix2="_cfnoise"
+    elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
+        echo "[Detected *_cal_wisp.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
+        suffix2="_wisp"
+    elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
+        echo "[Detected *_cal.fits files]"
+        file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
+        suffix2=""
+    else
+        return 1
+    fi
+}
+
+check_step() {
+    # check_step <exit code> <step name>: stop the run when a step fails so
+    # later stages don't run on incomplete inputs and the run's exit status
+    # reflects the failure.
+    local rc=$1
+    local name=$2
+    if [ "$rc" -ne 0 ]; then
+        echo ""
+        echo "[Error] $name failed (exit code $rc). See $OBS_DIR/logs/ for details."
+        echo "[Pipeline stopped]"
+        exit 1
+    fi
 }
 
 delete_directory_if_exists() {
@@ -29,45 +90,62 @@ delete_directory_if_exists() {
     fi
 }
 
+is_comma_list() {
+    [[ "$1" == *","* ]]
+}
+
+crds_bestrefs_for_uncal_input() {
+    local uncal_input="$1"
+    local uncal_files=()
+
+    # Globs need to be expanded by the shell (not passed as literal strings)
+    # so CRDS sees a list of real files. nullglob avoids handing CRDS the
+    # raw pattern when nothing matches.
+    shopt -s nullglob
+
+    if is_comma_list "$uncal_input"; then
+        # Comma-separated list of files: use exactly those files, so a
+        # test run only fetches references for its subset.
+        IFS=',' read -r -a files <<< "$uncal_input"
+        for f in "${files[@]}"; do
+            [ -n "$f" ] && uncal_files+=( "$f" )
+        done
+    elif [ -d "$uncal_input" ]; then
+        uncal_files=( "$uncal_input"/jw*uncal.fits )
+    elif [ -f "$uncal_input" ]; then
+        uncal_files=( "$uncal_input" )
+    fi
+
+    shopt -u nullglob
+
+    if [ ${#uncal_files[@]} -eq 0 ]; then
+        echo "[Error] No uncal files found at: $uncal_input"
+        return 1
+    fi
+
+    crds bestrefs --files "${uncal_files[@]}" --sync-references=1
+}
+
 delete_stage3_directory_if_exists() {
     local dir="$1"
-    local suffix="$2"
 
     if [ -d "$dir" ]; then
-        restore_stage2_files "$OBS_DIR/stage3_output" "$OBS_DIR/stage2_output" "$suffix"
         echo "[Deleting $dir to avoid conflicts.]"
         echo ""
         rm -rf "$dir"
     fi
 }
 
-restore_stage2_files() {
-    local stage3_dir="$1"
-    local stage2_dir="$2"
-    local suffix="$3"
-
-    echo "Restoring and renaming files from $stage3_dir to $stage2_dir..."
-    find "$stage3_dir" -type f -name '*cal.fits' | while read -r file; do
-        base_name=$(basename "$file")
-        new_name="${base_name%.fits}$suffix.fits"
-        mv "$file" "$stage2_dir/$new_name"
-    done
-
-    echo "Files restored and renamed successfully."
-}
-
 
 combine_observations=$(get_yaml_value 'combine_observations' "$CONFIG_FILE")
 group_by_directory=$(get_yaml_value 'group_by_directory' "$CONFIG_FILE")
 custom_name=$(get_yaml_value 'custom_name' "$CONFIG_FILE")
-full_exposure_striping=$(get_yaml_value 'full_exposure_striping' "$CONFIG_FILE")
 
 PIPELINE_DIR=$(get_yaml_value 'pipeline_directory' "$CONFIG_FILE")
 MY_CRDS_PATH=$(get_yaml_value 'crds_path' "$CONFIG_FILE")
 MY_CRDS_SERVER_URL=$(get_yaml_value 'crds_server_url' "$CONFIG_FILE")
 WISP_DIR=$(get_yaml_value 'wisp_directory' "$CONFIG_FILE")
 STAGE1_NPROC=$(get_yaml_value 'stage1_nproc' "$CONFIG_FILE")
-FNOISE_NPROC=$(get_yaml_value 'fnoise_nproc' "$CONFIG_FILE")
 STAGE2_NPROC=$(get_yaml_value 'stage2_nproc' "$CONFIG_FILE")
 WISP_NPROC=$(get_yaml_value 'wisp_nproc' "$CONFIG_FILE")
 CF_NPROC=$(get_yaml_value 'cfnoise_nproc' "$CONFIG_FILE")
@@ -91,7 +169,6 @@ run_pipeline() {
     LOG_FILE1="$OBS_DIR/logs/pipeline_stage1.log"
     LOG_FILE2="$OBS_DIR/logs/pipeline_stage2.log"
     LOG_FILE3="$OBS_DIR/logs/pipeline_stage3.log"
-    LOG_FILEF="$OBS_DIR/logs/pipeline_fnoise.log"
     LOG_FILEW="$OBS_DIR/logs/pipeline_wisp.log"
     LOG_FILEB="$OBS_DIR/logs/pipeline_bkg.log"
     LOG_FILECF="$OBS_DIR/logs/pipeline_cfnoise.log"
@@ -102,42 +179,33 @@ run_pipeline() {
     if ! should_skip_step "download_uncal_references"; then
         echo "« Downloading references for uncal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            IFS=',' read -r -a uncal_files <<< "$UNCAL_PATH" 
-            declare -A unique_dirs  
-            for file in "${uncal_files[@]}"; do
-                dir=$(dirname "$file")
-                unique_dirs["$dir"]=1
-            done
-            for dir in "${!unique_dirs[@]}"; do
-                crds bestrefs --files ${dir}/jw*uncal.fits --sync-references=1
-            done
-        elif [[ "$combine_observations" == "false" ]]; then
-            crds bestrefs --files ${UNCAL_PATH} --sync-references=1
-        fi
+        crds_bestrefs_for_uncal_input "$UNCAL_PATH" || exit 1
         echo ""
     else
         echo "[Download uncal references skipped]"
         echo ""
     fi
 
+
     if ! should_skip_step "stage1"; then
-        if [ -f "$LOG_FILE1" ]; then
-            echo "[Existing pipeline_stage1.log file deleted]"
-            echo ""
-            rm "$LOG_FILE1"
-        fi
         delete_directory_if_exists "$OBS_DIR/stage1_output"
         echo "==================="
         echo " Pipeline: stage 1 "
         echo "==================="
-        if [[ "$combine_observations" == "true" ]]; then
-            echo "Running pipeline in combined mode."
-        fi
-        if [[ "$combine_observations" == "true" || "$group_by_directory" == "true" ]]; then
-            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --combined_mode --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
-        elif [[ "$combine_observations" == "false" ]]; then
-            python "$PIPELINE_DIR/utils/pipeline_stage1.py" --nproc "$STAGE1_NPROC" --input_dir "$UNCAL_PATH" --output_dir "$OBS_DIR/stage1_output"
+
+        if is_comma_list "$UNCAL_PATH"; then
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" \
+                --nproc "$STAGE1_NPROC" \
+                --combined_mode \
+                --input_dir "$UNCAL_PATH" \
+                --output_dir "$OBS_DIR/stage1_output"
+            check_step $? "Stage 1"
+        else
+            python "$PIPELINE_DIR/utils/pipeline_stage1.py" \
+                --nproc "$STAGE1_NPROC" \
+                --input_dir "$UNCAL_PATH" \
+                --output_dir "$OBS_DIR/stage1_output"
+            check_step $? "Stage 1"
         fi
         echo ""
     else
@@ -145,30 +213,12 @@ run_pipeline() {
         echo ""
     fi
 
-    if ! should_skip_step "fnoise_correction"; then
-        if [ -f "$LOG_FILEF" ]; then
-            echo "[Existing pipeline_fnoise.log file deleted]"
-            echo ""
-            rm "$LOG_FILEF"
-        fi
-        echo "« Correcting 1/f noise »"
-        echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        echo "Accessing flat files before beginning calibration..."
-        if [[ "$full_exposure_striping" == "true" ]]; then
-            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output" 
-        else
-            python "$PIPELINE_DIR/utils/remstriping_update_parallel.py" --runall --nproc "$FNOISE_NPROC" --output_dir "$OBS_DIR/stage1_output"
-        fi
-        echo ""
-    else
-        echo "[1/f noise correction skipped]"
-        echo ""
-    fi
 
     if ! should_skip_step "download_rate_references"; then
         echo "« Downloading references for rate.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         crds bestrefs --files $OBS_DIR/stage1_output/jw*rate.fits --sync-references=1
+        check_step $? "Reference download for rate files"
         echo ""
     else
         echo "[Download rate references skipped]"
@@ -176,16 +226,12 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "stage2"; then
-        if [ -f "$LOG_FILE2" ]; then
-            echo "[Existing pipeline_stage2.log file deleted]"
-            echo ""
-            rm "$LOG_FILE2"
-        fi
         delete_directory_if_exists "$OBS_DIR/stage2_output"
         echo "===================="
         echo " Pipeline - stage 2 "
         echo "===================="
         python "$PIPELINE_DIR/utils/pipeline_stage2.py" --input_dir "$OBS_DIR/stage1_output" --nproc "$STAGE2_NPROC" --output_dir "$OBS_DIR/stage2_output"
+        check_step $? "Stage 2"
         echo ""
     else
         echo "[Pipeline Stage 2 skipped]"
@@ -193,14 +239,10 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "wisp_subtraction"; then
-        if [ -f "$LOG_FILEW" ]; then
-            echo "[Existing pipeline_wisp.log file deleted]"
-            echo ""
-            rm "$LOG_FILEW"
-        fi
         echo "« Subtracting wisps from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
         python "$PIPELINE_DIR/utils/subtract_wisp.py" --files $OBS_DIR/stage2_output/jw*cal.fits --wisp_dir "$WISP_DIR" --output_dir "$OBS_DIR/stage2_output" --suffix "_wisp" --nproc "$WISP_NPROC"
+        check_step $? "Wisp subtraction"
         echo ""
     else
         echo "[Wisp subtraction skipped]"
@@ -208,25 +250,26 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "cal_fnoise_reduction"; then
-        if [ -f "$LOG_FILECF" ]; then
-            echo "[Existing pipeline_cfnoise.log file deleted]"
-            echo ""
-            rm "$LOG_FILECF"
-        fi
         echo "« Reducing 1/f noise in exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
-        if compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
-            echo "[Detected *_cal_wisp.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
-            suffix="_wisp"
-        else
-            echo "[Detected *_cal.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
-            suffix=""
-        fi
+        # Collect cal files of both flavors in one shot so multiprocessing
+        # has the full work list. fnoise_reduction.py derives the output
+        # filename from each input's actual name.
+        shopt -s nullglob
+        CFNOISE_INPUTS=( "$OBS_DIR"/stage2_output/jw*cal.fits "$OBS_DIR"/stage2_output/jw*cal_wisp.fits )
+        shopt -u nullglob
 
-        python "$PIPELINE_DIR/utils/fnoise_reduction.py" --files $file_pattern --output_dir "$OBS_DIR/stage2_output" --suffix "$suffix" --nproc "$CF_NPROC"
+        if [ ${#CFNOISE_INPUTS[@]} -gt 0 ]; then
+            echo "[Processing ${#CFNOISE_INPUTS[@]} files]"
+            python "$PIPELINE_DIR/utils/fnoise_reduction.py" \
+                --files "${CFNOISE_INPUTS[@]}" \
+                --output_dir "$OBS_DIR/stage2_output" \
+                --nproc "$CF_NPROC"
+            check_step $? "1/f noise reduction"
+        else
+            echo "[No cal files found in $OBS_DIR/stage2_output]"
+        fi
         echo ""
 
     else
@@ -235,27 +278,10 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "background_subtraction"; then
-        if [ -f "$LOG_FILEB" ]; then
-            echo "[Existing pipeline_bkg.log file deleted]"
-            echo ""
-            rm "$LOG_FILEB"
-        fi
         echo "« Subtracting background from exposures »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
 
-        if compgen -G "$OBS_DIR/stage2_output/jw*cal_cfnoise.fits" > /dev/null; then
-            echo "[Detected *_cal_cfnoise.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_cfnoise.fits"
-            suffix2="_cfnoise"
-        elif compgen -G "$OBS_DIR/stage2_output/jw*cal_wisp.fits" > /dev/null; then
-            echo "[Detected *_cal_wisp.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal_wisp.fits"
-            suffix2="_wisp"
-        elif compgen -G "$OBS_DIR/stage2_output/jw*cal.fits" > /dev/null; then
-            echo "[Detected *_cal.fits files]"
-            file_pattern="$OBS_DIR/stage2_output/jw*cal.fits"
-            suffix2=""
-        else
+        if ! detect_cal_suffix; then
             echo "[Error: No suitable input files found for background subtraction!]"
             exit 1
         fi
@@ -266,7 +292,8 @@ run_pipeline() {
             --output_dir "$OBS_DIR/stage2_output" \
             --files $file_pattern \
             --suffix "$suffix2"
-        
+        check_step $? "Background subtraction"
+
         echo ""
 
     else
@@ -277,7 +304,12 @@ run_pipeline() {
     if ! should_skip_step "download_cal_references"; then
         echo "« Downloading references for cal.fits files »"
         echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
-        crds bestrefs --files $OBS_DIR/stage2_output/jw*$suffix2.fits --sync-references=1
+        if ! detect_cal_suffix; then
+            echo "[Error: No cal files found for reference download!]"
+            exit 1
+        fi
+        crds bestrefs --files $file_pattern --sync-references=1
+        check_step $? "Reference download for cal files"
         echo ""
     else
         echo "[Download cal references skipped]"
@@ -285,19 +317,45 @@ run_pipeline() {
     fi
 
     if ! should_skip_step "stage3"; then
-        if [ -f "$LOG_FILE3" ]; then
-            echo "[Existing pipeline_stage3.log file deleted]"
-            echo ""
-            rm "$LOG_FILE3"
-        fi
         delete_stage3_directory_if_exists "$OBS_DIR/stage3_output"
         echo "===================="
         echo " Pipeline - stage 3"
         echo "===================="
+        if ! detect_cal_suffix; then
+            echo "[Error: No cal files found for stage 3!]"
+            exit 1
+        fi
         python "$PIPELINE_DIR/utils/pipeline_stage3.py" --input_dir "$OBS_DIR/stage2_output" --target "$OBS_NAME" --output_dir "$OBS_DIR/stage3_output" --input_suffix "$suffix2"
+        check_step $? "Stage 3"
         echo ""
     else
         echo "[Pipeline Stage 3 skipped]"
+        echo ""
+    fi
+
+    COLOR_IMAGE_ENABLED=$(get_yaml_value 'color_image_enabled' "$CONFIG_FILE")
+    if [[ "$COLOR_IMAGE_ENABLED" == "true" ]]; then
+        echo "« Creating color image »"
+        echo "  ¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯¯  "
+        COLOR_MIN_LEVEL=$(get_yaml_value 'color_image_min_level' "$CONFIG_FILE")
+        COLOR_MAX_QUANTILE=$(get_yaml_value 'color_image_max_quantile' "$CONFIG_FILE")
+        COLOR_GAMMA=$(get_yaml_value 'color_image_gamma' "$CONFIG_FILE")
+        COLOR_HUES=$(get_yaml_value 'color_image_filter_hues' "$CONFIG_FILE")
+        COLOR_SUBTRACT_SKY=$(get_yaml_value 'color_image_subtract_sky' "$CONFIG_FILE")
+        if [[ "$COLOR_SUBTRACT_SKY" == "false" ]]; then
+            SKY_FLAG="--no-subtract-sky"
+        else
+            SKY_FLAG="--subtract-sky"
+        fi
+        python "$PIPELINE_DIR/utils/color_image.py" \
+            --obs-dir "$OBS_DIR" \
+            --target "$OBS_NAME" \
+            --min-level "${COLOR_MIN_LEVEL:-0.001}" \
+            --max-quantile "${COLOR_MAX_QUANTILE:-0.99999}" \
+            --gamma "${COLOR_GAMMA:-2.2}" \
+            --filter-hues "${COLOR_HUES:-\{\}}" \
+            $SKY_FLAG
+        check_step $? "Color image"
         echo ""
     fi
 
@@ -320,7 +378,13 @@ echo "# JWST data reduction pipeline #"
 echo "#                              #"
 echo "################################"
 
-OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR")
+if [ "$TEST_MODE" = true ]; then
+    echo ""
+    echo "TEST RUN: a few exposures per filter, output to <observation>_test"
+    OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR" --test-subset)
+else
+    OBSERVATIONS=$(python "$PIPELINE_DIR/utils/get_obs_info.py" "$PIPELINE_DIR")
+fi
 
 echo ""
 echo "« Observations found »"
@@ -348,6 +412,10 @@ for line in $OBSERVATIONS; do
     if [[ "$line" == OBS:* ]]; then
         target_name=$(echo "$line" | cut -d':' -f2)
         target_dir=$(echo "$line" | cut -d':' -f3)
+        if [ "$TEST_MODE" = true ]; then
+            n_files=$(echo "$target_dir" | tr ',' '\n' | grep -c .)
+            echo "[$target_name] test subset: $n_files uncal files"
+        fi
         run_pipeline "$target_name" "$target_dir"
     fi
 done

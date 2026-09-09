@@ -1,0 +1,2118 @@
+"""Streamlit front-end for the YOUNG JWST calibration pipeline.
+
+Local usage:
+    streamlit run app.py
+    # then open http://localhost:8501
+
+Running on a remote machine over SSH (the common case):
+    # On the remote machine:
+    streamlit run app.py
+    # On your laptop, in a separate terminal:
+    ssh -L 8501:localhost:8501 you@remote
+    # then open http://localhost:8501 in your laptop's browser
+
+The included .streamlit/config.toml sets headless = true so Streamlit
+will not try to launch a browser on the remote machine.
+
+This skeleton handles the config side: it reads config.yaml, shows every
+setting as a form widget, and writes the chosen values back when you
+click Save. The data-source section (MAST lookup, program-ID download,
+existing directory) and the Save & Run button are added in later
+commits.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+import sys
+from pathlib import Path
+
+import streamlit as st
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
+from mast_lookup import (
+    search_by_target,
+    search_by_coordinates,
+    search_by_proposal,
+    summarize,
+    filter_products_by_summary_rows,
+    resolve_target,
+)
+from mast_download import get_uncal_products, download_uncal_products
+from color_image import (
+    default_hues_for_filters,
+    find_i2d_files,
+    make_color_image,
+    sort_filters_by_wavelength,
+)
+from nircam_filters import FILTER_PIVOT_WAVELENGTHS_UM
+from pipeline_introspect import jwst_version
+from config_layout import serialize_config
+from pipeline_run import load_run, read_log_tail, start_run, stop_run
+from preflight import run_preflight
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+CONFIG_PATH = REPO_ROOT / "config.yaml"  # the user's settings; created on first save
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.default.yaml"  # tracked template, never written
+PIPELINE_SCRIPT = REPO_ROOT / "young_pipeline.sh"
+RESOURCES = REPO_ROOT / "resources"
+MAX_LOG_LINES = 500
+
+
+def _resolve_data_dir(text_dest: str) -> str:
+    """Return the data_directory value for a given Data-directory text input.
+
+    Prefers the path returned by the most recent successful download
+    (stored as 'resolved_data_directory' in session state, absolute) when
+    it still matches what the user has in the text box. If the user has
+    edited the text box away from that path, drop the resolved entry so
+    the new typed value wins.
+    """
+    resolved = st.session_state.get("resolved_data_directory")
+    if resolved:
+        try:
+            typed = Path(text_dest).expanduser().resolve()
+            cached = Path(resolved).expanduser().resolve()
+            if typed == cached:
+                return str(cached)
+        except OSError:
+            pass
+        # The user edited the field; forget the resolved entry.
+        st.session_state.pop("resolved_data_directory", None)
+    return text_dest
+
+
+@st.cache_data
+def _data_uri(relative_path: str, mime: str) -> str:
+    data = (RESOURCES / relative_path).read_bytes()
+    return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+
+
+@st.cache_data
+def _banner_html() -> str:
+    bg = _data_uri("xlssc_parallel_jpeg.jpg", "image/jpeg")
+    young_logo = _data_uri("younglogowhite.png", "image/png")
+    yonsei_logo = _data_uri("transparent_yonsei.png", "image/png")
+    jwst_logo = _data_uri("500px-JWST_decal.svg.png", "image/png")
+    # 100vw + -50vw / 50% left is the standard "full bleed" trick that
+    # breaks out of Streamlit's block-container padding so the banner spans
+    # the entire browser width on wide screens. mask-image fades the image
+    # itself to transparent at the bottom, which works in any theme
+    # (light/dark/system) because the page background shows through.
+    return f"""
+    <div style="
+        position: relative;
+        width: 100vw;
+        left: 50%;
+        right: 50%;
+        margin-left: -50vw;
+        margin-right: -50vw;
+        margin-top: -4rem;
+        margin-bottom: -1.5rem;
+        height: 460px;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    ">
+        <div style="
+            position: absolute;
+            inset: 0;
+            background-image: url('{bg}');
+            background-size: cover;
+            background-position: center 70%;
+        "></div>
+        <div style="
+            position: absolute;
+            inset: 0;
+        "></div>
+        <div style="
+            position: absolute;
+            top: 62px;
+            left: 36px;
+            right: 200px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 24px;
+            z-index: 2;
+        ">
+            <div style="color: #ffffff; max-width: 55%; text-shadow: 0 2px 10px rgba(0,0,0,0.75);">
+                <h1 style="font-size: 2.5rem; margin: 0; font-weight: 700; line-height: 1.1;">
+                    YOUNG JWST Calibration Pipeline
+                </h1>
+                <p style="font-size: 1.05rem; margin-top: 10px; opacity: 0.95;">
+                    Search MAST for JWST NIRCam data, configure the calibration pipeline, and run it, all from this page.
+                </p>
+            </div>
+            <div style="
+                display: flex;
+                flex-direction: row;
+                gap: 22px;
+                align-items: center;
+                flex-shrink: 0;
+                margin-top: -10px;
+            ">
+                <img src="{young_logo}"  style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="YOUNG">
+                <img src="{yonsei_logo}" style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="Yonsei">
+                <img src="{jwst_logo}"   style="height: 56px; object-fit: contain; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));" alt="JWST">
+            </div>
+        </div>
+    </div>
+    """
+
+PIPELINE_STEPS = [
+    "download_uncal_references",
+    "stage1",
+    "download_rate_references",
+    "stage2",
+    "wisp_subtraction",
+    "cal_fnoise_reduction",
+    "background_subtraction",
+    "download_cal_references",
+    "stage3",
+]
+
+
+def load_config() -> dict:
+    """Load config.yaml, or config.default.yaml until the user has saved one."""
+    path = CONFIG_PATH if CONFIG_PATH.exists() else DEFAULT_CONFIG_PATH
+    if not path.exists():
+        return {}
+    with open(path, "r") as f:
+        return yaml.safe_load(f) or {}
+
+
+PATH_FIELDS = (
+    "crds_path",
+    "data_directory",
+    "output_directory",
+    "wisp_directory",
+    "pipeline_directory",
+)
+
+
+def _expand_path_str(value):
+    """Expand a leading ~ in a string. Leave non-strings and empty values alone."""
+    if isinstance(value, str) and value:
+        return str(Path(value).expanduser())
+    return value
+
+
+def save_config(config: dict) -> None:
+    # Expand ~ in known path fields so the on-disk config has concrete paths.
+    # If we did not do this, '~/crds_cache' would be passed through to the
+    # pipeline scripts and CRDS would create a literal directory called '~'.
+    expanded = dict(config)
+    for field in PATH_FIELDS:
+        if field in expanded:
+            expanded[field] = _expand_path_str(expanded[field])
+    with open(CONFIG_PATH, "w") as f:
+        f.write(serialize_config(expanded))
+
+
+def validate_config(config: dict) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings) for the given config. Errors block running."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    data_dir_raw = str(config.get("data_directory") or "").strip()
+    data_dir = Path(data_dir_raw).expanduser()
+    if not data_dir_raw:
+        # Path("") is ".", so test the raw string; otherwise an empty field
+        # would pass as the current directory and be scanned for uncal files.
+        errors.append("Data directory is empty.")
+    elif not data_dir.exists():
+        errors.append(f"Data directory does not exist: {data_dir}")
+    else:
+        has_uncal = any(data_dir.rglob("*_uncal.fits"))
+        if not has_uncal:
+            warnings.append(
+                f"No *_uncal.fits files found in {data_dir} (search is recursive). "
+                "Download some first or point to a different directory."
+            )
+
+    skip = set(config.get("skip_steps") or [])
+    if "wisp_subtraction" not in skip:
+        wisp = str(config.get("wisp_directory", "")).strip()
+        if not wisp:
+            warnings.append(
+                "WISP templates directory is empty but wisp_subtraction is not skipped. "
+                "Either set a path or add 'wisp_subtraction' to the skipped steps."
+            )
+        elif not Path(wisp).expanduser().exists():
+            warnings.append(f"WISP templates directory does not exist: {wisp}")
+
+    crds = str(config.get("crds_path", "")).strip()
+    if crds and not Path(crds).expanduser().exists():
+        warnings.append(
+            f"CRDS cache path does not exist yet: {crds}. The pipeline will create it on first use."
+        )
+
+    return errors, warnings
+
+
+LOG_PANEL_HEIGHT_PX = 500
+
+_LOG_PANEL_STYLE = (
+    "margin:0; font-family: ui-monospace, Menlo, Consolas, monospace; "
+    "font-size:0.85rem; line-height:1.45; padding:12px; background:#0d1117; "
+    "color:#d1d9e0; border-radius:6px; white-space:pre; overflow-x:auto;"
+)
+
+
+def _render_log_lines(lines: list[str]) -> None:
+    """Render log lines as a terminal-style block that updates in place.
+
+    st.html inserts the block verbatim, so newlines survive (markdown would
+    collapse them into one paragraph) and Streamlit diffs the element on
+    rerun instead of rebuilding it, unlike the earlier iframe panel, which
+    reloaded and flashed dark on every refresh.
+    """
+    body = (
+        "\n".join(lines)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    ) or " "
+    st.html(f'<pre style="{_LOG_PANEL_STYLE}">{body}</pre>')
+
+
+def _fmt_time(when) -> str:
+    return when.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _run_label(run) -> str:
+    return "test run" if run.mode == "test" else "pipeline run"
+
+
+@st.fragment(run_every=2)
+def _live_log_panel() -> None:
+    """Refresh the running job's status line and log every 2 s.
+
+    Only this small fragment reruns, so the Stop button and everything else
+    on the page stay put instead of fading in and out with each refresh.
+    """
+    run = load_run(REPO_ROOT)
+    if run is None or not run.running:
+        # Finished (or vanished) since the last refresh: redraw the whole
+        # page so the buttons re-enable and the final panel shows.
+        st.rerun(scope="app")
+        return
+    st.markdown(
+        f"⏳ **Running {_run_label(run)}…** started {_fmt_time(run.started_at)} (pid {run.pid})"
+    )
+    with st.container(height=LOG_PANEL_HEIGHT_PX, autoscroll=True):
+        _render_log_lines(read_log_tail(run.log_path, MAX_LOG_LINES))
+
+
+def _live_run_panel(run) -> None:
+    with st.container(border=True):
+        _live_log_panel()
+        st.caption(
+            "This run is detached from the browser. You can close this tab or "
+            "disconnect from the server and it keeps going; reopen the page to "
+            "pick it up again. Full per-stage detail is in <output>/<obs>/logs/."
+        )
+        if st.button("Stop pipeline", key="stop_pipeline"):
+            stop_run(REPO_ROOT)
+            st.rerun()
+
+
+def _finished_run_panel(run, config_to_run: dict) -> None:
+    """Show the most recent run's outcome and log."""
+    started = _fmt_time(run.started_at)
+    kind = _run_label(run)
+    if run.exit_code == 0:
+        label = f"Last {kind} finished successfully (started {started})."
+        state = "complete"
+    elif run.crashed:
+        label = (
+            f"Last {kind} (started {started}) ended without recording an "
+            "exit code. The process was killed or the machine restarted."
+        )
+        state = "error"
+    else:
+        label = f"Last {kind} exited with code {run.exit_code} (started {started})."
+        state = "error"
+    if run.finished_at is not None:
+        label += f" Finished {_fmt_time(run.finished_at)}."
+
+    with st.status(label, expanded=True, state=state):
+        if run.mode == "test" and run.exit_code == 0:
+            st.success(
+                "Every step completed on the test subset. Outputs are in "
+                "<output>/<observation>_test. Start the full reduction with "
+                "the current settings?"
+            )
+            if st.button("Run full pipeline now ▶", type="primary", key="run_after_test"):
+                save_config(config_to_run)
+                start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+                st.rerun()
+        with st.container(height=LOG_PANEL_HEIGHT_PX):
+            _render_log_lines(read_log_tail(run.log_path, MAX_LOG_LINES))
+
+
+def render_run_panel(config_to_run: dict) -> None:
+    """Live panel if a run is in progress, otherwise the last run's result."""
+    run = load_run(REPO_ROOT)
+    if run is None:
+        return
+    if run.running:
+        _live_run_panel(run)
+    else:
+        _finished_run_panel(run, config_to_run)
+
+
+def _filters_in_observation(output_dir: str, obs_name: str) -> list[str]:
+    """Return filters present in <output_dir>/<obs_name>, sorted by wavelength."""
+    obs_dir = Path(output_dir).expanduser() / obs_name
+    filter_paths = find_i2d_files(obs_dir, obs_name)
+    return sort_filters_by_wavelength(filter_paths.keys())
+
+
+@st.cache_data(show_spinner=False)
+def _filters_in_uncal_dir(data_dir: str, dir_mtime: float, n_files: int) -> list[str]:
+    """Return filters found in *_uncal.fits primary headers, sorted by wavelength.
+
+    The dir_mtime and n_files args are cache-invalidation signals only — they
+    let Streamlit reuse the result until files are added, removed, or modified.
+    """
+    from astropy.io import fits  # local import: only paid when this helper runs
+
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+    filters: set[str] = set()
+    for fits_path in path.glob("*_uncal.fits"):
+        try:
+            hdr = fits.getheader(str(fits_path), ext=0)
+        except Exception:
+            continue
+        filt = hdr.get("FILTER")
+        if filt:
+            filters.add(str(filt))
+    return sort_filters_by_wavelength(filters)
+
+
+def _scan_uncal_filters(data_dir: str) -> list[str]:
+    """Cached uncal-header scan; returns [] if data_dir is empty/missing."""
+    if not data_dir:
+        return []
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+    n_files = sum(1 for _ in path.glob("*_uncal.fits"))
+    if n_files == 0:
+        return []
+    return _filters_in_uncal_dir(str(path), path.stat().st_mtime, n_files)
+
+
+def _expected_obs_names(config: dict, data_dir: str) -> list[str]:
+    """Predict the observation directory names the pipeline would create.
+
+    Mirrors the logic in utils/get_obs_info.py:
+      - group_by_directory=True : one obs per immediate subdir with uncal files
+      - combine_observations=True (overridden by above) : one obs = custom_name
+      - otherwise : one obs per PROGRAM id read from the uncal headers
+    """
+    if not data_dir:
+        return []
+    path = Path(data_dir).expanduser()
+    if not path.is_dir():
+        return []
+
+    if config.get("group_by_directory"):
+        names = []
+        for sub in sorted(path.iterdir()):
+            if not sub.is_dir():
+                continue
+            if any(sub.rglob("*_uncal.fits")):
+                cleaned = sub.name.replace(" ", "_").replace(".", "_")
+                names.append(f"Output_{cleaned}")
+        return names
+
+    if config.get("combine_observations"):
+        custom = str(config.get("custom_name") or "").strip()
+        return [custom or "Combined_Observation"]
+
+    # Default: group by PROGRAM id — requires reading primary headers.
+    from astropy.io import fits
+
+    programs: set[str] = set()
+    for f in path.glob("*_uncal.fits"):
+        try:
+            hdr = fits.getheader(str(f), ext=0)
+        except Exception:
+            continue
+        pid = str(hdr.get("PROGRAM", "00000")).strip() or "00000"
+        programs.add(pid)
+    return sorted(programs)
+
+
+def _expected_obs_with_i2d(config: dict, data_dir: str, output_dir: str) -> list[str]:
+    """Of the obs names this config would create, which already have i2d files?"""
+    expected = _expected_obs_names(config, data_dir)
+    if not expected:
+        return []
+    base = Path(output_dir).expanduser()
+    if not base.is_dir():
+        return []
+    matches: list[str] = []
+    for name in expected:
+        obs_dir = base / name
+        if obs_dir.is_dir() and any(
+            obs_dir.glob("stage3_output/*/output_files/*_i2d.fits")
+        ):
+            matches.append(name)
+    return matches
+
+
+def _get(config: dict, key: str, default):
+    value = config.get(key)
+    return value if value is not None else default
+
+
+@st.cache_data(show_spinner=False)
+def _introspect_stage_cached(stage: str, _version: str) -> dict:
+    """Cached per-stage step/parameter introspection (keyed by jwst version)."""
+    from pipeline_introspect import introspect_stage
+
+    return introspect_stage(stage)
+
+
+def _override_value_widget(stage_key, step, param, spec, existing):
+    """Render a value widget typed to the parameter's spec; return its value."""
+    wkey = f"{stage_key}_val_{step}_{param}"
+    ptype = spec.get("type")
+    default = spec.get("default")
+    start = existing if existing is not None else default
+    if ptype == "boolean":
+        # Pad so the checkbox lines up with the labelled dropdowns/inputs
+        # beside it instead of floating up to the top of the row.
+        st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
+        return st.checkbox(
+            "Value", value=bool(start) if start is not None else False, key=wkey
+        )
+    if ptype == "option" and spec.get("options"):
+        opts = list(spec["options"])
+        if start is not None and start not in opts:
+            opts = [start] + opts
+        return st.selectbox(
+            "Value", opts, index=opts.index(start) if start in opts else 0, key=wkey
+        )
+    if ptype == "float":
+        return float(st.number_input(
+            "Value", value=float(start) if start is not None else 0.0, key=wkey
+        ))
+    if ptype in ("integer", "int"):
+        return int(st.number_input(
+            "Value", value=int(start) if start is not None else 0, step=1, key=wkey
+        ))
+    # string / list / unknown types: free text (only place the user types)
+    return st.text_input(
+        "Value", value="" if start is None else str(start), key=wkey
+    )
+
+
+# Notes shown when the user selects a parameter whose YOUNG-pipeline default
+# intentionally differs from (or pins) the JWST behaviour.
+_OVERRIDE_NOTES = {
+    ("stage2", "resample", "skip"): (
+        "Resample is skipped by default in stage 2 to save time — the mosaic "
+        "is built in stage 3. (The JWST default is to run it.)"
+    ),
+    ("stage1", "ramp_fit", "maximum_cores"): (
+        "maximum_cores is set to 1 by default so this step's own "
+        "multiprocessing does not interfere with the per-file multiprocessing "
+        "wrapper used for the whole stage."
+    ),
+    ("stage1", "jump", "maximum_cores"): (
+        "maximum_cores is set to 1 by default so this step's own "
+        "multiprocessing does not interfere with the per-file multiprocessing "
+        "wrapper used for the whole stage."
+    ),
+}
+
+
+def render_step_overrides(stage_key: str, pipeline_label: str, current: dict, new_config: dict):
+    """Guided per-step parameter overrides for a JWST pipeline stage.
+
+    Renders step/parameter dropdowns (from runtime introspection), a typed
+    value widget, an Add button, the list of active overrides with remove
+    buttons, and a read-only parameter reference. Writes the resulting nested
+    dict to new_config[f"{stage_key}_step_overrides"].
+    """
+    cfg_key = f"{stage_key}_step_overrides"
+    steps = _introspect_stage_cached(stage_key, jwst_version())
+    if not steps:
+        st.info(
+            f"Could not introspect {pipeline_label} in this environment, so "
+            "guided overrides are unavailable here. Any existing overrides in "
+            "config.yaml are preserved."
+        )
+        new_config[cfg_key] = dict(_get(current, cfg_key, {}) or {})
+        return
+
+    ss_key = f"_ovr_{stage_key}"
+    if ss_key not in st.session_state:
+        saved = _get(current, cfg_key, {}) or {}
+        st.session_state[ss_key] = {s: dict(p) for s, p in saved.items()}
+    overrides = st.session_state[ss_key]
+
+    step_names = sorted(steps.keys())
+    c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+    with c1:
+        sel_step = st.selectbox("Step", step_names, key=f"{stage_key}_sel_step")
+    with c2:
+        param_names = sorted(steps[sel_step].keys())
+        sel_param = st.selectbox("Parameter", param_names, key=f"{stage_key}_sel_param")
+    spec = steps[sel_step][sel_param]
+    existing = overrides.get(sel_step, {}).get(sel_param)
+    with c3:
+        val = _override_value_widget(stage_key, sel_step, sel_param, spec, existing)
+    with c4:
+        st.markdown("<div style='height: 1.8rem;'></div>", unsafe_allow_html=True)
+        if st.button("Add / update", key=f"{stage_key}_add_override"):
+            overrides.setdefault(sel_step, {})[sel_param] = val
+            st.rerun()
+
+    desc = spec.get("desc") or "(no description)"
+    st.caption(
+        f"**{sel_step}.{sel_param}** ({spec.get('type')}) — {desc}  ·  "
+        f"default: `{spec.get('default')}`"
+    )
+    _note = _OVERRIDE_NOTES.get((stage_key, sel_step, sel_param))
+    if _note:
+        st.info(_note)
+
+    if overrides:
+        st.markdown("**Active overrides**")
+        for s in sorted(overrides.keys()):
+            for p in sorted(overrides[s].keys()):
+                oc1, oc2 = st.columns([6, 1])
+                oc1.code(f"{s} · {p} = {overrides[s][p]}", language=None)
+                if oc2.button("✕", key=f"{stage_key}_rm_{s}_{p}"):
+                    del overrides[s][p]
+                    if not overrides[s]:
+                        del overrides[s]
+                    st.rerun()
+    else:
+        st.caption("No overrides set — every step uses the pipeline default.")
+
+    with st.expander(f"{pipeline_label} parameter reference (jwst {jwst_version()})"):
+        rows = []
+        for s in sorted(steps.keys()):
+            for p in sorted(steps[s].keys()):
+                info = steps[s][p]
+                rows.append({
+                    "Step": s,
+                    "Parameter": p,
+                    "Type": str(info.get("type")),
+                    "Default": "" if info.get("default") is None else str(info.get("default")),
+                    "Description": info.get("desc") or "",
+                })
+        st.dataframe(rows, width="stretch", hide_index=True)
+
+    new_config[cfg_key] = {s: dict(p) for s, p in overrides.items()}
+
+
+st.set_page_config(page_title="YOUNG JWST Pipeline", page_icon="🔭", layout="wide")
+
+# Make Streamlit's own toolbar transparent and let pointer-events pass
+# through the header bar to the banner underneath. The toolbar buttons
+# themselves stay clickable. Drop every flavor of top padding the main
+# block-container might have so the banner can start at the very top.
+st.markdown(
+    """
+    <style>
+    [data-testid="stHeader"],
+    .stApp > header {
+        background: transparent !important;
+        pointer-events: none !important;
+    }
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="stHeader"] button {
+        pointer-events: auto !important;
+    }
+    [data-testid="stMain"] > div.block-container,
+    section.main > div.block-container,
+    .main .block-container,
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 0 !important;
+    }
+    .stApp { padding-top: 0 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(_banner_html(), unsafe_allow_html=True)
+
+current = load_config()
+new_config = dict(current)
+
+
+# st.divider()
+# st.caption(f"Editing {CONFIG_PATH}")
+# Dark rounded pill so the caption stays legible over bright spots in the banner.
+# Negative top margin lifts it back onto the banner — the banner ends with a
+# `margin-bottom: -1.5rem` of its own, so we offset further to clear it.
+st.markdown(
+    f'<div style="text-align: center; margin: -1rem 0 0.75rem 0;">'
+    f'<span style="display: inline-block; font-size: 0.8rem; color: #e6e6e6; '
+    f'background-color: rgba(0, 0, 0, 0.6); padding: 3px 12px; '
+    f'border-radius: 12px;">Editing {CONFIG_PATH}</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+
+# 1. Data source
+st.header("1. Data source")
+data_source_mode = st.radio(
+    "How do you want to provide data?",
+    [
+        "MAST lookup by target name",
+        "MAST lookup by RA / Dec",
+        "MAST lookup by program ID",
+        "Use existing directory",
+    ],
+    horizontal=True,
+)
+
+
+def _render_aladin(
+    ra_deg: float,
+    dec_deg: float,
+    radius_arcsec: float,
+    label: str = "",
+    height: int = 620,
+    session_key: str = "aladin",
+):
+    """Render an Aladin Lite viewer centered on (ra, dec) with a circle for the radius.
+
+    Shows a 'Loading sky view...' overlay until Aladin finishes initializing,
+    and an error message if loading the script or initializing the viewer
+    fails (or takes more than ~15 seconds). A 'Reload sky view' button
+    below the viewer lets the user retry by forcing a fresh render.
+    """
+    retry_token = st.session_state.get(f"{session_key}_retry", 0)
+    fov_deg = max(min(4 * radius_arcsec / 3600.0, 5.0), 0.05)
+    safe_label = label.replace("'", "").replace('"', "")
+    inner_height = max(height - 20, 200)
+
+    st.markdown("##### Sky View")
+    html = f"""<!doctype html>
+<html data-retry-token="{retry_token}">
+<head>
+  <meta charset="utf-8" />
+  <script src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"></script>
+  <style>
+    html, body {{ margin: 0; padding: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }}
+    #aladin-lite-div {{ width: 100%; height: {inner_height}px; }}
+    #aladin-status {{
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      background: rgba(0,0,0,0.85);
+      z-index: 10;
+      text-align: center;
+      padding: 20px;
+      font-size: 0.95rem;
+    }}
+    #aladin-status.error {{ background: rgba(70,15,15,0.92); color: #ffd9d9; }}
+    .spinner {{
+      width: 32px; height: 32px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: #6ec3ff;
+      animation: spin 0.9s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div id="aladin-lite-div"></div>
+  <div id="aladin-status">
+    <div class="spinner"></div>
+    <div id="aladin-status-text">Loading sky view…</div>
+  </div>
+  <script>
+    const statusEl = document.getElementById('aladin-status');
+    const statusText = document.getElementById('aladin-status-text');
+    const showError = (msg) => {{
+      statusEl.classList.add('error');
+      statusEl.innerHTML = '<div>⚠️ ' + msg + '</div><div style="font-size:0.85rem;opacity:0.8;">Click \\'Reload sky view\\' below to retry.</div>';
+    }};
+    const loadTimeout = setTimeout(() => {{
+      if (statusEl && statusEl.style.display !== 'none') {{
+        showError('Sky view took too long to load.');
+      }}
+    }}, 15000);
+
+    if (typeof A === 'undefined') {{
+      clearTimeout(loadTimeout);
+      showError('Could not reach the Aladin Lite CDN.');
+    }} else {{
+      A.init.then(() => {{
+        try {{
+          const aladin = A.aladin('#aladin-lite-div', {{
+            target: '{ra_deg} {dec_deg}',
+            fov: {fov_deg},
+            survey: 'P/PanSTARRS/DR1/color-z-zg-g',
+            showLayersControl: true,
+            showGotoControl: true,
+            showZoomControl: true,
+            showFullscreenControl: true,
+            showCooGrid: false
+          }});
+          const overlay = A.graphicOverlay({{color: 'cyan', lineWidth: 2}});
+          aladin.addOverlay(overlay);
+          overlay.add(A.circle({ra_deg}, {dec_deg}, {radius_arcsec / 3600.0}));
+          const cat = A.catalog({{name: 'Search center', sourceSize: 36, color: 'lime'}});
+          aladin.addCatalog(cat);
+          cat.addSources([A.source({ra_deg}, {dec_deg}, {{name: '{safe_label}'}})]);
+          clearTimeout(loadTimeout);
+          statusEl.style.display = 'none';
+        }} catch (err) {{
+          clearTimeout(loadTimeout);
+          showError('Aladin initialization failed: ' + err.message);
+        }}
+      }}).catch(err => {{
+        clearTimeout(loadTimeout);
+        showError('Aladin initialization failed: ' + (err && err.message ? err.message : err));
+      }});
+    }}
+  </script>
+</body>
+</html>"""
+    # components.html(html, height=height)
+    st.iframe(html, height=height)
+    
+    _, mid, _ = st.columns([1, 1, 1])
+    with mid:
+        if st.button(
+            "↻ Reload sky view",
+            key=f"{session_key}_reload",
+            help="Force the viewer to re-fetch and re-initialize.",
+            width="stretch",
+        ):
+            st.session_state[f"{session_key}_retry"] = retry_token + 1
+            st.rerun()
+
+
+def _show_search_results(observations, products, download_dir: str, session_key: str):
+    """Display a summary table with selectable rows and a Download button.
+
+    products is the pre-fetched UNCAL products table (from
+    get_uncal_products). It's used for accurate file counts and as the
+    source for downloading.
+    """
+    summary_rows = summarize(observations, uncal_products=products)
+    total_frames = sum(row["n_frames"] for row in summary_rows)
+    st.markdown(
+        f"**Found {len(observations)} observations in "
+        f"{len({row['program'] for row in summary_rows})} programs ({total_frames} uncal files).**"
+    )
+    st.caption("Tick rows to download just those program/filter combinations. Leave nothing ticked to download everything.")
+
+    event = st.dataframe(
+        summary_rows,
+        hide_index=True,
+        # use_container_width=True,
+        width='stretch',
+        on_select="rerun",
+        selection_mode="multi-row",
+        key=f"select_{session_key}",
+    )
+    selected_indices = list(event.selection.rows) if event and event.selection else []
+
+    if selected_indices:
+        selected_rows = [summary_rows[i] for i in selected_indices]
+        to_download = filter_products_by_summary_rows(observations, products, selected_rows)
+        selected_frames = sum(summary_rows[i]["n_frames"] for i in selected_indices)
+        button_label = f"Download {selected_frames} selected files"
+    else:
+        to_download = products
+        button_label = f"Download all {total_frames} files"
+
+    if st.button(button_label, key=f"download_{session_key}", type="primary"):
+        progress_bar = st.progress(0.0, text="Starting…")
+        status_text = st.empty()
+
+        def on_progress(i, total, filename, status):
+            progress_bar.progress(i / total, text=f"[{i}/{total}] {filename} ({status})")
+            if status == "failed":
+                status_text.warning(f"Failed: {filename}")
+
+        try:
+            result = download_uncal_products(to_download, download_dir, progress=on_progress)
+        except Exception as exc:
+            st.error(f"Download failed: {exc}")
+            return None
+
+        progress_bar.empty()
+        n_ok = len(result["downloaded"])
+        n_fail = len(result["failed"])
+        if n_fail:
+            st.warning(f"Downloaded {n_ok} files to {result['path']}, {n_fail} failed.")
+            with st.expander("Failed files"):
+                st.write(result["failed"])
+        else:
+            st.success(f"Downloaded {n_ok} files to {result['path']}")
+        return str(result["path"])
+    return None
+
+
+if data_source_mode == "MAST lookup by target name":
+    col_t, col_r, col_d = st.columns([2, 1, 2])
+    with col_t:
+        target_name = st.text_input("Target name", placeholder="e.g. Abell 2744")
+    with col_r:
+        target_radius = st.number_input(
+            "Search radius (arcsec)",
+            min_value=1.0,
+            max_value=3600.0,
+            value=60.0,
+            step=10.0,
+            key="target_radius",
+        )
+    with col_d:
+        target_dest = st.text_input(
+            "Data directory",
+            value=_get(current, "data_directory", "./data"),
+            key="target_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
+        )
+
+    if st.button("Search MAST", key="search_target"):
+        clean = target_name.strip()
+        if not clean:
+            st.error("Enter a target name first.")
+        else:
+            try:
+                with st.spinner(f"Searching MAST for '{clean}'…"):
+                    obs = search_by_target(clean, radius_arcsec=float(target_radius))
+                with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                    products = get_uncal_products(obs)
+                st.session_state["mast_obs_target"] = obs
+                st.session_state["mast_products_target"] = products
+                st.session_state["mast_target_name"] = clean
+                st.session_state["mast_target_radius"] = float(target_radius)
+                coords = resolve_target(clean)
+                if coords is not None:
+                    st.session_state["mast_target_coords"] = coords
+                else:
+                    st.session_state.pop("mast_target_coords", None)
+            except Exception as exc:
+                st.session_state.pop("mast_obs_target", None)
+                st.session_state.pop("mast_products_target", None)
+                st.error(f"MAST search failed: {exc}")
+
+    has_results = "mast_obs_target" in st.session_state
+    has_coords = "mast_target_coords" in st.session_state
+
+    if has_results or has_coords:
+        col_table, col_view = st.columns([1, 1])
+        with col_table:
+            if has_results:
+                downloaded_path = _show_search_results(
+                    st.session_state["mast_obs_target"],
+                    st.session_state["mast_products_target"],
+                    target_dest,
+                    "target",
+                )
+                if downloaded_path:
+                    st.session_state["resolved_data_directory"] = downloaded_path
+        with col_view:
+            if has_coords:
+                ra, dec = st.session_state["mast_target_coords"]
+                _render_aladin(
+                    ra,
+                    dec,
+                    st.session_state.get("mast_target_radius", float(target_radius)),
+                    label=st.session_state.get("mast_target_name", ""),
+                    height=640,
+                    session_key="aladin_target",
+                )
+
+    new_config["data_directory"] = _resolve_data_dir(target_dest)
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
+
+elif data_source_mode == "MAST lookup by RA / Dec":
+    col_ra, col_dec, col_r, col_d = st.columns([1, 1, 1, 2])
+    with col_ra:
+        ra_deg = st.number_input(
+            "RA (deg)",
+            min_value=0.0,
+            max_value=360.0,
+            value=0.0,
+            step=0.001,
+            format="%.6f",
+            key="coord_ra",
+        )
+    with col_dec:
+        dec_deg = st.number_input(
+            "Dec (deg)",
+            min_value=-90.0,
+            max_value=90.0,
+            value=0.0,
+            step=0.001,
+            format="%.6f",
+            key="coord_dec",
+        )
+    with col_r:
+        coord_radius = st.number_input(
+            "Search radius (arcsec)",
+            min_value=1.0,
+            max_value=3600.0,
+            value=60.0,
+            step=10.0,
+            key="coord_radius",
+        )
+    with col_d:
+        coord_dest = st.text_input(
+            "Data directory",
+            value=_get(current, "data_directory", "./data"),
+            key="coord_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
+        )
+
+    if st.button("Search MAST", key="search_coord"):
+        try:
+            with st.spinner(f"Searching MAST at RA={ra_deg:.6f}, Dec={dec_deg:.6f}…"):
+                obs = search_by_coordinates(ra_deg, dec_deg, radius_arcsec=float(coord_radius))
+            with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                products = get_uncal_products(obs)
+            st.session_state["mast_obs_coord"] = obs
+            st.session_state["mast_products_coord"] = products
+        except Exception as exc:
+            st.session_state.pop("mast_obs_coord", None)
+            st.session_state.pop("mast_products_coord", None)
+            st.error(f"MAST search failed: {exc}")
+
+    col_table, col_view = st.columns([1, 1])
+    with col_table:
+        if "mast_obs_coord" in st.session_state:
+            downloaded_path = _show_search_results(
+                st.session_state["mast_obs_coord"],
+                st.session_state["mast_products_coord"],
+                coord_dest,
+                "coord",
+            )
+            if downloaded_path:
+                st.session_state["resolved_data_directory"] = downloaded_path
+        else:
+            st.info("Enter coordinates and click Search MAST to see what is available.")
+    with col_view:
+        _render_aladin(
+            ra_deg,
+            dec_deg,
+            float(coord_radius),
+            label=f"RA={ra_deg:.4f}, Dec={dec_deg:.4f}",
+            height=640,
+            session_key="aladin_coord",
+        )
+
+    new_config["data_directory"] = _resolve_data_dir(coord_dest)
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
+
+elif data_source_mode == "MAST lookup by program ID":
+    col_p, col_d = st.columns([2, 3])
+    with col_p:
+        proposal_input = st.text_input(
+            "Program ID(s)",
+            placeholder="e.g. 2756, or 2756, 1837 for multiple",
+            help="One or more program IDs, separated by commas or spaces.",
+        )
+    with col_d:
+        prop_dest = st.text_input(
+            "Data directory",
+            value=_get(current, "data_directory", "./data"),
+            key="prop_dest",
+            help="Files download here AND the pipeline reads from here. Change this to point at a new dataset.",
+        )
+
+    if st.button("Search MAST", key="search_proposal"):
+        if not proposal_input.strip():
+            st.error("Enter at least one program ID first.")
+        else:
+            try:
+                with st.spinner(f"Searching MAST for proposal(s) {proposal_input}…"):
+                    obs = search_by_proposal(proposal_input.strip())
+                with st.spinner(f"Counting uncal files for {len(obs)} observations…"):
+                    products = get_uncal_products(obs)
+                st.session_state["mast_obs_proposal"] = obs
+                st.session_state["mast_products_proposal"] = products
+            except Exception as exc:
+                st.session_state.pop("mast_obs_proposal", None)
+                st.session_state.pop("mast_products_proposal", None)
+                st.error(f"MAST search failed: {exc}")
+
+    if "mast_obs_proposal" in st.session_state:
+        downloaded_path = _show_search_results(
+            st.session_state["mast_obs_proposal"],
+            st.session_state["mast_products_proposal"],
+            prop_dest,
+            "proposal",
+        )
+        if downloaded_path:
+            st.session_state["resolved_data_directory"] = downloaded_path
+
+    new_config["data_directory"] = _resolve_data_dir(prop_dest)
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
+
+else:  # Use existing directory
+    new_config["data_directory"] = st.text_input(
+        "Data directory (where uncal.fits files live)",
+        value=_get(current, "data_directory", "./data"),
+        help="The pipeline searches this directory recursively for *_uncal.fits files.",
+    )
+    st.caption(f"Pipeline will read uncal files from: `{new_config['data_directory']}`")
+
+
+# 2. Output & grouping
+st.header("2. Output & grouping")
+col1, col2 = st.columns(2)
+with col1:
+    new_config["output_directory"] = st.text_input(
+        "Output directory",
+        value=_get(current, "output_directory", "."),
+    )
+    new_config["custom_name"] = st.text_input(
+        "Custom name (used when 'combine all' is selected)",
+        value=_get(current, "custom_name", "Combined_Observation"),
+    )
+with col2:
+    grouping_modes = ["By program ID", "By subdirectory", "Combine all"]
+    if _get(current, "group_by_directory", False):
+        default_mode = "By subdirectory"
+    elif _get(current, "combine_observations", False):
+        default_mode = "Combine all"
+    else:
+        default_mode = "By program ID"
+    grouping_mode = st.radio(
+        "Grouping",
+        grouping_modes,
+        index=grouping_modes.index(default_mode),
+        help="How to split your uncal files into independent pipeline runs.",
+    )
+    new_config["group_by_directory"] = grouping_mode == "By subdirectory"
+    new_config["combine_observations"] = grouping_mode == "Combine all"
+
+
+# 3. Calibration steps (skip toggles)
+st.header("3. Calibration steps")
+st.caption("Check a step to skip it. Unchecked steps run normally.")
+current_skip = set(_get(current, "skip_steps", []) or [])
+skip_cols = st.columns(2)
+new_skip = []
+for i, step in enumerate(PIPELINE_STEPS):
+    with skip_cols[i % 2]:
+        if st.checkbox(f"Skip {step}", value=step in current_skip, key=f"skip_{step}"):
+            new_skip.append(step)
+new_config["skip_steps"] = new_skip
+
+new_config["wisp_directory"] = st.text_input(
+    "WISP templates directory (required for wisp_subtraction)",
+    value=_get(current, "wisp_directory", ""),
+)
+st.caption(
+    "Download templates from "
+    "[stsci.app.box.com](https://stsci.app.box.com/s/1bymvf1lkrqbdn9rnkluzqk30e8o2bne) "
+    "and point the path above at the unzipped folder."
+)
+
+
+# 4. Performance
+st.header("4. Performance (parallel workers per stage)")
+nproc_cols = st.columns(3)
+nproc_fields = [
+    ("stage1_nproc", "Stage 1"),
+    ("stage2_nproc", "Stage 2"),
+    ("wisp_nproc", "WISP subtraction"),
+    ("cfnoise_nproc", "1/f noise (cal)"),
+    ("bkg_nproc", "Background subtraction"),
+]
+for i, (key, label) in enumerate(nproc_fields):
+    with nproc_cols[i % 3]:
+        new_config[key] = st.number_input(
+            f"{label} (nproc)",
+            min_value=1,
+            max_value=128,
+            value=int(_get(current, key, 8)),
+            step=1,
+        )
+
+perf_left, _perf_right = st.columns(2)
+with perf_left:
+    new_config["stage3_use_multiprocessing"] = st.checkbox(
+        "Use multiprocessing across filters in stage 3",
+        value=bool(_get(current, "stage3_use_multiprocessing", True)),
+    )
+    new_config["min_processes"] = st.number_input(
+        "Minimum parallel processes for stage 3",
+        min_value=1,
+        max_value=32,
+        value=int(_get(current, "min_processes", 8)),
+    )
+
+
+# 5. CRDS
+st.header("5. CRDS")
+new_config["crds_path"] = st.text_input(
+    "CRDS cache path",
+    value=_get(current, "crds_path", "~/crds_cache"),
+)
+new_config["crds_server_url"] = st.text_input(
+    "CRDS server URL",
+    value=_get(current, "crds_server_url", "https://jwst-crds.stsci.edu"),
+)
+
+
+# 6. Advanced settings
+st.header("6. Advanced settings")
+
+st.subheader("Pipeline stage parameter overrides")
+
+with st.expander("Stage 1 (Detector1Pipeline) step overrides"):
+    st.caption(
+        "Override any Detector1Pipeline step parameter for the installed jwst "
+        "version. Pick a step and parameter, set a value, and click Add. "
+        "Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage1", "Detector1Pipeline", current, new_config)
+
+with st.expander("Stage 2 (Image2Pipeline) step overrides"):
+    st.caption(
+        "Override any Image2Pipeline step parameter for the installed jwst "
+        "version. Pick a step and parameter, set a value, and click Add. "
+        "Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage2", "Image2Pipeline", current, new_config)
+
+with st.expander("Stage 3 (Image3Pipeline) step overrides"):
+    st.caption(
+        "Override any Image3Pipeline step parameter for the installed jwst "
+        "version. These merge on top of the curated tweakreg/skymatch/resample "
+        "settings below. Anything you don't set keeps the pipeline default."
+    )
+    render_step_overrides("stage3", "Image3Pipeline", current, new_config)
+
+st.subheader("Calibration step settings")
+
+with st.expander("Advanced background subtraction options"):
+    st.caption(
+        "Tiered source masking runs 4 passes from bright (tier 1) to faint "
+        "(tier 4) before estimating the sky. These defaults come from the "
+        "CEERS-derived algorithm. Change them only if you know why."
+    )
+    _tier_nsigma_def = list(_get(current, "bkg_tier_nsigma", [1.5, 1.5, 1.5, 1.5]))
+    _tier_npix_def = list(_get(current, "bkg_tier_npixels", [15, 10, 3, 1]))
+    _tier_kernel_def = list(_get(current, "bkg_tier_kernel_size", [25, 15, 5, 2]))
+    _tier_dilate_def = list(_get(current, "bkg_tier_dilate_size", [33, 25, 21, 19]))
+
+    _hcols = st.columns([1, 2, 2, 2, 2])
+    _hcols[0].markdown("**Tier**")
+    _hcols[1].markdown("**nsigma**")
+    _hcols[2].markdown("**npixels**")
+    _hcols[3].markdown("**kernel**")
+    _hcols[4].markdown("**dilate**")
+
+    _new_nsigma, _new_npix, _new_kernel, _new_dilate = [], [], [], []
+    for _t in range(4):
+        _rcols = st.columns([1, 2, 2, 2, 2])
+        _rcols[0].markdown(f"{_t + 1}")
+        _new_nsigma.append(
+            float(_rcols[1].number_input(
+                f"nsigma tier {_t + 1}", value=float(_tier_nsigma_def[_t]),
+                min_value=0.0, step=0.1, label_visibility="collapsed",
+                key=f"bkg_nsigma_{_t}",
+            ))
+        )
+        _new_npix.append(
+            int(_rcols[2].number_input(
+                f"npixels tier {_t + 1}", value=int(_tier_npix_def[_t]),
+                min_value=1, step=1, label_visibility="collapsed",
+                key=f"bkg_npix_{_t}",
+            ))
+        )
+        _new_kernel.append(
+            int(_rcols[3].number_input(
+                f"kernel tier {_t + 1}", value=int(_tier_kernel_def[_t]),
+                min_value=1, step=1, label_visibility="collapsed",
+                key=f"bkg_kernel_{_t}",
+            ))
+        )
+        _new_dilate.append(
+            int(_rcols[4].number_input(
+                f"dilate tier {_t + 1}", value=int(_tier_dilate_def[_t]),
+                min_value=0, step=1, label_visibility="collapsed",
+                key=f"bkg_dilate_{_t}",
+            ))
+        )
+    new_config["bkg_tier_nsigma"] = _new_nsigma
+    new_config["bkg_tier_npixels"] = _new_npix
+    new_config["bkg_tier_kernel_size"] = _new_kernel
+    new_config["bkg_tier_dilate_size"] = _new_dilate
+
+    new_config["bkg_faint_tiers"] = st.multiselect(
+        "Tiers used for residual-bias evaluation",
+        [1, 2, 3, 4],
+        default=list(_get(current, "bkg_faint_tiers", [3, 4])),
+        help="Which tiers' masks define the faint regions used to evaluate residual bias.",
+    )
+
+    _bk1, _bk2 = st.columns(2)
+    with _bk1:
+        new_config["bkg_ring_radius_in"] = st.number_input(
+            "Ring inner radius", min_value=1.0,
+            value=float(_get(current, "bkg_ring_radius_in", 40)), step=1.0,
+        )
+        new_config["bkg_ring_width"] = st.number_input(
+            "Ring width", min_value=1.0,
+            value=float(_get(current, "bkg_ring_width", 3)), step=1.0,
+        )
+        new_config["bkg_ring_clip_max_sigma"] = st.number_input(
+            "Ring clip max sigma", min_value=0.1,
+            value=float(_get(current, "bkg_ring_clip_max_sigma", 5.0)), step=0.5,
+        )
+        new_config["bkg_ring_clip_box_size"] = int(st.number_input(
+            "Ring clip box size", min_value=1,
+            value=int(_get(current, "bkg_ring_clip_box_size", 100)), step=1,
+        ))
+        new_config["bkg_ring_clip_filter_size"] = int(st.number_input(
+            "Ring clip filter size", min_value=1,
+            value=int(_get(current, "bkg_ring_clip_filter_size", 3)), step=1,
+        ))
+    with _bk2:
+        new_config["bkg_bg_box_size"] = int(st.number_input(
+            "Background2D box size", min_value=1,
+            value=int(_get(current, "bkg_bg_box_size", 5)), step=1,
+        ))
+        new_config["bkg_bg_filter_size"] = int(st.number_input(
+            "Background2D filter size", min_value=1,
+            value=int(_get(current, "bkg_bg_filter_size", 3)), step=1,
+        ))
+        new_config["bkg_bg_exclude_percentile"] = int(st.number_input(
+            "Background2D exclude percentile", min_value=0, max_value=100,
+            value=int(_get(current, "bkg_bg_exclude_percentile", 90)), step=1,
+        ))
+        new_config["bkg_bg_sigma"] = st.number_input(
+            "Background2D sigma", min_value=0.1,
+            value=float(_get(current, "bkg_bg_sigma", 3)), step=0.5,
+        )
+        new_config["bkg_plot_smooth"] = int(st.number_input(
+            "Diagnostic plot smoothing (0 = off)", min_value=0,
+            value=int(_get(current, "bkg_plot_smooth", 0)), step=1,
+        ))
+
+    new_config["bkg_interpolator"] = st.selectbox(
+        "Background interpolator",
+        ["zoom", "IDW"],
+        index=["zoom", "IDW"].index(_get(current, "bkg_interpolator", "zoom")),
+    )
+    _saved_dq_flags = list(_get(current, "bkg_dq_flags_to_mask", ["SATURATED"]))
+    _dq_flag_options = sorted(
+        {
+            "DO_NOT_USE", "SATURATED", "JUMP_DET", "DROPOUT", "OUTLIER",
+            "PERSISTENCE", "AD_FLOOR", "UNRELIABLE_ERROR", "NON_SCIENCE",
+        }
+        | set(_saved_dq_flags)
+    )
+    new_config["bkg_dq_flags_to_mask"] = st.multiselect(
+        "DQ flags to mask before fitting the background",
+        _dq_flag_options,
+        default=_saved_dq_flags,
+    )
+
+with st.expander("Advanced WISP subtraction options"):
+    st.caption(
+        "These mirror the wisp-subtraction algorithm's own defaults and only "
+        "affect the wisp-impacted detectors (NRCA3/4, NRCB3/4). Change them "
+        "only if you know why."
+    )
+
+    st.markdown("**Source segmentation**")
+    _ws1, _ws2 = st.columns(2)
+    with _ws1:
+        new_config["wisp_create_segmap"] = st.checkbox(
+            "Create source segmentation map",
+            value=bool(_get(current, "wisp_create_segmap", True)),
+            help="Detect sources so they can be excluded when scaling the wisp template.",
+        )
+        new_config["wisp_seg_from_lw"] = st.checkbox(
+            "Build segmap from long-wavelength image",
+            value=bool(_get(current, "wisp_seg_from_lw", True)),
+        )
+        new_config["wisp_save_segmap"] = st.checkbox(
+            "Save segmentation map",
+            value=bool(_get(current, "wisp_save_segmap", False)),
+        )
+    with _ws2:
+        new_config["wisp_sigma"] = st.number_input(
+            "Detection sigma", min_value=0.0,
+            value=float(_get(current, "wisp_sigma", 0.8)), step=0.1,
+        )
+        new_config["wisp_npixels"] = int(st.number_input(
+            "Detection min pixels", min_value=1,
+            value=int(_get(current, "wisp_npixels", 10)), step=1,
+        ))
+        new_config["wisp_dilate_segmap"] = int(st.number_input(
+            "Segmap dilation (pixels)", min_value=0,
+            value=int(_get(current, "wisp_dilate_segmap", 5)), step=1,
+        ))
+
+    st.markdown("**Template scaling**")
+    new_config["wisp_scale_wisp"] = st.checkbox(
+        "Scale the wisp template before subtracting",
+        value=bool(_get(current, "wisp_scale_wisp", True)),
+    )
+    _wsc1, _wsc2 = st.columns(2)
+    with _wsc1:
+        _scale_method_opts = ["mad", "median"]
+        _saved_scale_method = _get(current, "wisp_scale_method", "mad")
+        if _saved_scale_method not in _scale_method_opts:
+            _scale_method_opts.append(_saved_scale_method)
+        new_config["wisp_scale_method"] = st.selectbox(
+            "Scale method", _scale_method_opts,
+            index=_scale_method_opts.index(_saved_scale_method),
+        )
+        new_config["wisp_poly_degree"] = int(st.number_input(
+            "Residual polynomial degree", min_value=0,
+            value=int(_get(current, "wisp_poly_degree", 5)), step=1,
+        ))
+    with _wsc2:
+        new_config["wisp_factor_min"] = st.number_input(
+            "Scale factor min",
+            value=float(_get(current, "wisp_factor_min", 0.0)), step=0.1,
+        )
+        new_config["wisp_factor_max"] = st.number_input(
+            "Scale factor max",
+            value=float(_get(current, "wisp_factor_max", 2.0)), step=0.1,
+        )
+        new_config["wisp_factor_step"] = st.number_input(
+            "Scale factor step",
+            value=float(_get(current, "wisp_factor_step", 0.01)),
+            step=0.01, format="%.3f",
+        )
+
+    st.markdown("**Template smoothing**")
+    _wsm1, _wsm2 = st.columns(2)
+    with _wsm1:
+        new_config["wisp_gauss_smooth_wisp"] = st.checkbox(
+            "Gaussian-smooth the wisp template",
+            value=bool(_get(current, "wisp_gauss_smooth_wisp", False)),
+        )
+    with _wsm2:
+        new_config["wisp_gauss_stddev"] = st.number_input(
+            "Gaussian smoothing stddev", min_value=0.0,
+            value=float(_get(current, "wisp_gauss_stddev", 3.0)), step=0.5,
+        )
+
+    st.markdown("**Subtraction and residual correction**")
+    _wsub1, _wsub2 = st.columns(2)
+    with _wsub1:
+        new_config["wisp_sub_wisp"] = st.checkbox(
+            "Subtract the wisp template",
+            value=bool(_get(current, "wisp_sub_wisp", True)),
+        )
+        new_config["wisp_correct_rows"] = st.checkbox(
+            "Correct row (1/f) residuals",
+            value=bool(_get(current, "wisp_correct_rows", True)),
+        )
+        new_config["wisp_correct_cols"] = st.checkbox(
+            "Correct column (odd/even) residuals",
+            value=bool(_get(current, "wisp_correct_cols", False)),
+        )
+    with _wsub2:
+        new_config["wisp_dq_val"] = int(st.number_input(
+            "DQ flag value for flagged wisp pixels", min_value=0,
+            value=int(_get(current, "wisp_dq_val", 1)), step=1,
+            help="1 = DO_NOT_USE. Only used when a flag threshold is set below.",
+        ))
+        _use_min_wisp = st.checkbox(
+            "Apply a minimum wisp value",
+            value=_get(current, "wisp_min_wisp", None) is not None,
+        )
+        if _use_min_wisp:
+            new_config["wisp_min_wisp"] = st.number_input(
+                "Minimum wisp value",
+                value=float(_get(current, "wisp_min_wisp", 0.0) or 0.0), step=0.1,
+            )
+        else:
+            new_config["wisp_min_wisp"] = None
+        _use_flag_thresh = st.checkbox(
+            "Flag wisp pixels above a threshold",
+            value=_get(current, "wisp_flag_wisp_thresh", None) is not None,
+        )
+        if _use_flag_thresh:
+            new_config["wisp_flag_wisp_thresh"] = st.number_input(
+                "Flag threshold",
+                value=float(_get(current, "wisp_flag_wisp_thresh", 0.0) or 0.0), step=0.1,
+            )
+        else:
+            new_config["wisp_flag_wisp_thresh"] = None
+
+    st.markdown("**Diagnostics**")
+    _wd1, _wd2, _wd3 = st.columns(3)
+    with _wd1:
+        new_config["wisp_save_model"] = st.checkbox(
+            "Save wisp model",
+            value=bool(_get(current, "wisp_save_model", True)),
+        )
+    with _wd2:
+        new_config["wisp_plot"] = st.checkbox(
+            "Save diagnostic plot",
+            value=bool(_get(current, "wisp_plot", True)),
+        )
+    with _wd3:
+        new_config["wisp_show_plot"] = st.checkbox(
+            "Show plot (notebook only)",
+            value=bool(_get(current, "wisp_show_plot", False)),
+        )
+
+with st.expander("Advanced 1/f noise (cal) options"):
+    st.caption(
+        "Controls the source masking and baseline interpolation used by the "
+        "cal-level 1/f noise correction. Defaults match the algorithm's "
+        "originals. Change them only if you know why. The per-amplifier column "
+        "splits (512-pixel boundaries) are fixed by the NIRCam detector layout "
+        "and are not exposed."
+    )
+    new_config["cfnoise_whole_image"] = st.checkbox(
+        "Correct the whole image at once (skip per-channel 512-pixel split)",
+        value=bool(_get(current, "cfnoise_whole_image", False)),
+        help=(
+            "By default the correction auto-selects per-channel (512-px) or "
+            "whole-row medians based on source coverage. Enable this to always "
+            "use a single whole-row median across the full 2048-pixel width."
+        ),
+    )
+    _cf1, _cf2 = st.columns(2)
+    with _cf1:
+        new_config["cfnoise_threshold1"] = st.number_input(
+            "Broad-mask detection sigma (threshold1)", min_value=0.0,
+            value=float(_get(current, "cfnoise_threshold1", 1)), step=0.5,
+            help="Nsigma passed to detect_threshold for the broad source mask.",
+        )
+        new_config["cfnoise_threshold2"] = st.number_input(
+            "Narrow-mask percentile (threshold2)", min_value=0.0, max_value=100.0,
+            value=float(_get(current, "cfnoise_threshold2", 98)), step=1.0,
+            help="Percentile used to mask the dx (derivative) image.",
+        )
+        new_config["cfnoise_interp_step"] = int(st.number_input(
+            "Baseline anchor spacing (pixels)", min_value=1,
+            value=int(_get(current, "cfnoise_interp_step", 4)), step=1,
+        ))
+    with _cf2:
+        new_config["cfnoise_npixels"] = int(st.number_input(
+            "Source detection min pixels", min_value=1,
+            value=int(_get(current, "cfnoise_npixels", 200)), step=1,
+        ))
+        new_config["cfnoise_mask_size"] = int(st.number_input(
+            "Source mask dilation size", min_value=1,
+            value=int(_get(current, "cfnoise_mask_size", 11)), step=1,
+        ))
+
+st.subheader("Output extensions")
+
+with st.expander("Extract i2d extensions"):
+    col_e1, col_e2 = st.columns(2)
+    with col_e1:
+        new_config["extract_sci"] = st.checkbox("Extract SCI", value=bool(_get(current, "extract_sci", True)))
+        new_config["extract_err"] = st.checkbox("Extract ERR", value=bool(_get(current, "extract_err", True)))
+        new_config["extract_wht"] = st.checkbox("Extract WHT", value=bool(_get(current, "extract_wht", True)))
+        new_config["extract_con"] = st.checkbox("Extract CON", value=bool(_get(current, "extract_con", False)))
+    with col_e2:
+        new_config["extract_var_poisson"] = st.checkbox("Extract VAR_POISSON", value=bool(_get(current, "extract_var_poisson", False)))
+        new_config["extract_var_rnoise"] = st.checkbox("Extract VAR_RNOISE", value=bool(_get(current, "extract_var_rnoise", False)))
+        new_config["extract_var_flat"] = st.checkbox("Extract VAR_FLAT", value=bool(_get(current, "extract_var_flat", False)))
+
+
+# 7. Required mosaic creation settings
+st.header("7. Required mosaic creation settings")
+st.info(
+    "Defaults are tested to work well, but these settings should be reviewed "
+    "and determined by the user for their data."
+)
+_in_memory_note = (
+    "Speeds up processing when checked, but can cause the reduction to "
+    "fail if the image is too large for system memory, or if too many "
+    "parallel processes are used in stage 3."
+)
+
+st.markdown("**Reference filter and mosaic footprint**")
+_AUTO_REF_LABEL = "Automatic (largest footprint, then longest wavelength)"
+_detected_filters = _scan_uncal_filters(new_config.get("data_directory") or "")
+_current_ref = str(_get(current, "reference_filter", "auto") or "auto")
+_ref_options = [_AUTO_REF_LABEL] + list(_detected_filters)
+if _current_ref.lower() != "auto" and _current_ref.upper() not in _ref_options:
+    _ref_options.append(_current_ref.upper())
+col_ref, col_fp = st.columns(2)
+with col_ref:
+    _ref_choice = st.selectbox(
+        "Reference filter",
+        options=_ref_options,
+        index=0 if _current_ref.lower() == "auto" else _ref_options.index(_current_ref.upper()),
+        help=(
+            "The filter processed first. Its source catalog is the astrometric "
+            "reference every other filter is aligned to. Automatic picks the "
+            "filter covering the largest sky area, so every other filter has "
+            "reference sources across as much of its footprint as possible; "
+            "the longest wavelength breaks exact ties. The list shows filters "
+            "found in the data directory."
+        ),
+    )
+    new_config["reference_filter"] = "auto" if _ref_choice == _AUTO_REF_LABEL else _ref_choice
+with col_fp:
+    _fp_labels = {
+        "all_filters": "Combined footprint of all filters",
+        "reference_filter": "Reference filter's footprint only",
+    }
+    _current_fp = str(_get(current, "mosaic_footprint", "all_filters") or "all_filters")
+    new_config["mosaic_footprint"] = st.radio(
+        "Mosaic footprint",
+        options=list(_fp_labels),
+        index=list(_fp_labels).index(_current_fp) if _current_fp in _fp_labels else 0,
+        format_func=lambda k: _fp_labels[k],
+        help=(
+            "Every filter is resampled onto one shared pixel grid. Combined "
+            "footprint sizes that grid to cover every exposure of every filter, "
+            "so nothing is cropped; areas a filter did not observe are empty in "
+            "its mosaic. Reference filter only crops every mosaic to the "
+            "reference filter's coverage, which uses less memory and disk when "
+            "the footprints differ a lot."
+        ),
+    )
+
+st.markdown("**Resample**")
+col_a, col_b = st.columns(2)
+with col_a:
+    new_config["pixel_scale"] = st.number_input(
+        "Pixel scale (arcsec)",
+        min_value=0.001,
+        max_value=1.0,
+        value=float(_get(current, "pixel_scale", 0.02)),
+        step=0.005,
+        format="%.4f",
+    )
+    new_config["pixfrac"] = st.number_input(
+        "pixfrac",
+        min_value=0.01,
+        max_value=1.0,
+        value=float(_get(current, "pixfrac", 0.75)),
+        step=0.05,
+        format="%.2f",
+    )
+with col_b:
+    new_config["rotation"] = st.number_input(
+        "Rotation (degrees; 0 = North up)",
+        value=float(_get(current, "rotation", 0.0)),
+        step=1.0,
+        format="%.2f",
+    )
+    new_config["res_kernel"] = st.selectbox(
+        "Resample kernel",
+        ["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"],
+        index=["square", "gaussian", "point", "turbo", "lanczos2", "lanczos3"].index(
+            _get(current, "res_kernel", "square")
+        ),
+    )
+new_config["resample_in_memory"] = st.checkbox(
+    "Resample in memory",
+    value=bool(_get(current, "resample_in_memory", True)),
+)
+st.caption(_in_memory_note)
+
+st.markdown("**Outlier detection**")
+new_config["outlier_in_memory"] = st.checkbox(
+    "Outlier detection in memory",
+    value=bool(_get(current, "outlier_in_memory", True)),
+)
+st.caption(_in_memory_note)
+
+st.markdown("**Tweakreg**")
+new_config["external_reference"] = st.text_input(
+    "External reference catalog",
+    value=_get(current, "external_reference", ""),
+    help=(
+        "Either a path to a CSV with RA,DEC columns, or a catalog name "
+        "the jwst pipeline knows about (e.g. GAIADR3). Type the name "
+        "plain, without quotes."
+    ),
+    placeholder="GAIADR3   or   /path/to/refcat.csv",
+)
+col_t1, col_t2 = st.columns(2)
+with col_t1:
+    new_config["starfinder"] = st.selectbox(
+        "Starfinder",
+        ["segmentation", "iraf", "dao"],
+        index=["segmentation", "iraf", "dao"].index(
+            _get(current, "starfinder", "segmentation")
+        ),
+    )
+    new_config["snr_threshold"] = st.number_input(
+        "SNR threshold",
+        min_value=0.1,
+        max_value=100.0,
+        value=float(_get(current, "snr_threshold", 5.0)),
+        step=0.5,
+    )
+with col_t2:
+    new_config["abs_fitgeometry"] = st.selectbox(
+        "abs_fitgeometry",
+        ["rshift", "shift", "rscale", "general"],
+        index=["rshift", "shift", "rscale", "general"].index(
+            _get(current, "abs_fitgeometry", "rshift")
+        ),
+    )
+    new_config["fitgeometry"] = st.selectbox(
+        "fitgeometry",
+        ["rshift", "shift", "rscale", "general"],
+        index=["rshift", "shift", "rscale", "general"].index(
+            _get(current, "fitgeometry", "rshift")
+        ),
+    )
+st.markdown("**Skymatch**")
+new_config["skymethod"] = st.selectbox(
+    "skymethod",
+    ["match", "globalmin", "localmin", "globalmin+match"],
+    index=["match", "globalmin", "localmin", "globalmin+match"].index(
+        _get(current, "skymethod", "match")
+    ),
+)
+
+
+# 8. Color image
+st.header("8. Color image")
+st.caption(
+    "Build a single color TIFF from your stage 3 i2d mosaics. Each filter is "
+    "also saved as a stretched grayscale TIFF so you can edit them in Photoshop."
+)
+
+new_config["color_image_enabled"] = st.checkbox(
+    "Create color image after pipeline run",
+    value=bool(_get(current, "color_image_enabled", False)),
+    help="When checked, the color image is generated automatically for each observation at the end of the pipeline.",
+)
+
+new_config["color_image_subtract_sky"] = st.checkbox(
+    "Auto-subtract residual sky per filter (recommended)",
+    value=bool(_get(current, "color_image_subtract_sky", True)),
+    help=(
+        "Each filter's stage-3 mosaic still has a small residual sky pedestal "
+        "after background subtraction. When this is on, a sigma-clipped median "
+        "is subtracted from each filter so that 'sky' maps to the same black "
+        "across all filters, removing color hue in empty regions."
+    ),
+)
+
+ci_left, ci_right = st.columns(2)
+with ci_left:
+    new_config["color_image_min_level"] = st.number_input(
+        "Stretch min level",
+        min_value=0.0,
+        max_value=10.0,
+        value=float(_get(current, "color_image_min_level", 0.001)),
+        step=0.001,
+        format="%.4f",
+        help="Pixel floor for the asinh stretch. Values at or below this become black.",
+    )
+    new_config["color_image_max_quantile"] = st.slider(
+        "Stretch max quantile",
+        min_value=0.95,
+        max_value=1.0,
+        value=float(_get(current, "color_image_max_quantile", 0.99999)),
+        step=0.0001,
+        format="%.5f",
+        help="The pixel value at this quantile defines the stretch ceiling.",
+    )
+with ci_right:
+    new_config["color_image_gamma"] = st.slider(
+        "Gamma",
+        min_value=0.5,
+        max_value=4.0,
+        value=float(_get(current, "color_image_gamma", 2.2)),
+        step=0.1,
+        help="Final gamma correction. Higher = darker midtones.",
+    )
+
+# Decide whether this section is in "pre-run" (configure hues for the
+# upcoming pipeline) or "regenerate" (rebuild color image for an obs that
+# already finished) mode.
+#
+# The trigger is whether the obs directory the current config WOULD create
+# (custom_name, program ID, or per-subdir name) already exists with stage-3
+# i2d files. That way, changing data_directory or custom_name immediately
+# refocuses the section — old unrelated outputs in output_directory no
+# longer pollute the dropdown.
+ci_output_dir = new_config.get("output_directory") or "."
+data_dir = new_config.get("data_directory") or ""
+uncal_filters = _scan_uncal_filters(data_dir)
+expected_with_i2d = _expected_obs_with_i2d(new_config, data_dir, ci_output_dir)
+
+# Start from whatever hues are in the saved config; we'll layer the user's
+# new picks on top before save.
+saved_hues = dict(_get(current, "color_image_filter_hues", {}) or {})
+new_hues = dict(saved_hues)
+
+selected_obs: str | None = None
+filters_present: list[str] = []
+filters_source: str = ""  # one of "uncal", "i2d", or ""
+
+if expected_with_i2d:
+    # The pipeline's target output for this config already exists — switch
+    # to regenerate mode using the authoritative i2d filter set.
+    if len(expected_with_i2d) == 1:
+        selected_obs = expected_with_i2d[0]
+        st.caption(f"Observation: `{selected_obs}`")
+    else:
+        selected_obs = st.selectbox(
+            "Observation to (re)generate",
+            expected_with_i2d,
+            key="color_image_obs_choice",
+        )
+    filters_present = _filters_in_observation(ci_output_dir, selected_obs)
+    filters_source = "i2d"
+elif uncal_filters:
+    filters_present = uncal_filters
+    filters_source = "uncal"
+
+n_filters = len(filters_present)
+
+if filters_source == "uncal":
+    st.caption(
+        f"{n_filters} filter(s) detected from uncal files in "
+        f"`{data_dir}`: {', '.join(filters_present)}. Configure hues now — "
+        "they'll be saved to config and applied automatically at the end "
+        "of the pipeline run."
+    )
+elif filters_source == "i2d" and n_filters == 0:
+    st.warning(f"No i2d.fits files found under {selected_obs}/stage3_output.")
+elif not filters_present:
+    st.info(
+        "Point `data_directory` at uncal files (or run the pipeline first) "
+        "to configure per-filter hues."
+    )
+
+if n_filters == 1:
+    st.info(
+        f"Only one filter ({filters_present[0]}) is available. "
+        "The per-filter stretched TIFF will still be saved; no combined color image."
+    )
+elif n_filters == 2:
+    st.caption(
+        f"Two filters detected ({filters_present[0]} and {filters_present[1]}). "
+        "Combined image will use the luminance-preserving recipe: "
+        f"blue = {filters_present[0]}, red = {filters_present[1]}, green = mean."
+    )
+elif n_filters >= 3:
+    st.caption(
+        f"Set a hue (0°–240°) for each filter — defaults follow a wavelength "
+        "ramp (240° = blue at the shortest wavelength, 0° = red at the longest)."
+    )
+    defaults = default_hues_for_filters(filters_present)
+
+    # If the Reset button was clicked on the previous run, the rerun lands
+    # here BEFORE any number_input widgets are instantiated — which is the
+    # only point at which Streamlit lets us seed their session state keys.
+    if st.session_state.pop("_pending_hue_reset", False):
+        for f in filters_present:
+            st.session_state[f"hue_{f}"] = float(defaults.get(f, 120.0))
+
+    # Render hue inputs in up-to-3 columns.
+    cols = st.columns(min(3, n_filters))
+    for i, filt in enumerate(filters_present):
+        with cols[i % len(cols)]:
+            wl = FILTER_PIVOT_WAVELENGTHS_UM.get(filt)
+            label = f"{filt}" + (f" ({wl} µm)" if wl else "")
+            default_value = float(saved_hues.get(filt, defaults.get(filt, 120.0)))
+            new_hues[filt] = float(
+                st.number_input(
+                    label,
+                    min_value=0.0,
+                    max_value=240.0,
+                    value=default_value,
+                    step=5.0,
+                    key=f"hue_{filt}",
+                )
+            )
+
+    # Reset to wavelength-ramp defaults. Saved hues from prior runs would
+    # otherwise stick around via the widget's session state, which makes it
+    # awkward to re-baseline when testing a new pipeline version. Setting a
+    # pending-reset flag here and rerunning defers the session-state writes
+    # to the next run, before the widgets above are instantiated.
+    reset_col, _reset_pad = st.columns([1, 4])
+    with reset_col:
+        if st.button(
+            "Reset hues to wavelength defaults",
+            key="reset_hues_to_defaults",
+            help="Restore each filter's hue to the wavelength ramp (shortest = 240°, longest = 0°).",
+        ):
+            st.session_state["_pending_hue_reset"] = True
+            st.rerun()
+
+new_config["color_image_filter_hues"] = new_hues
+
+# Permanent action row: Generate is disabled until stage-3 i2d files exist
+# for the current configuration; the Show preview toggle is always available
+# and shows a friendly message when there's nothing to display.
+has_i2d = filters_source == "i2d"
+preview_disk_path: Path | None = None
+if selected_obs is not None:
+    candidate = (
+        Path(ci_output_dir).expanduser()
+        / selected_obs
+        / "color"
+        / f"{selected_obs}_color_preview.png"
+    )
+    if candidate.exists():
+        preview_disk_path = candidate
+session_preview = (
+    st.session_state.get(f"color_preview_{selected_obs}") if selected_obs else None
+)
+
+ci_actions_left, ci_actions_mid, _ci_actions_right = st.columns([1, 1, 3])
+with ci_actions_left:
+    gen_help = (
+        f"Generate the color image for `{selected_obs}` using the hues above."
+        if has_i2d
+        else (
+            "No stage-3 i2d files exist for the current configuration yet. "
+            "Run the pipeline first, or change data / output / custom_name settings."
+        )
+    )
+    generate_clicked = st.button(
+        "Generate color image now",
+        key="color_image_generate",
+        disabled=not has_i2d,
+        help=gen_help,
+    )
+with ci_actions_mid:
+    show_preview = st.toggle(
+        "Show color image preview",
+        value=False,
+        key="show_color_preview_toggle",
+        help="Display the most recent preview PNG for this observation.",
+    )
+
+if generate_clicked and has_i2d:
+    save_config(new_config)
+    obs_dir_path = Path(ci_output_dir).expanduser() / selected_obs
+
+    # Reset the per-run log so successive clicks don't append to old runs.
+    st.session_state["color_image_gen_log"] = []
+    st.session_state["color_image_gen_state"] = "running"
+
+    with st.status(
+        f"Generating color image for {selected_obs}…", expanded=True
+    ) as gen_status:
+        gen_log_box = st.empty()
+
+        class _SessionLogHandler(logging.Handler):
+            def emit(self, record):
+                msg = self.format(record)
+                st.session_state["color_image_gen_log"].append(msg)
+                gen_log_box.code(
+                    "\n".join(st.session_state["color_image_gen_log"]),
+                    language=None,
+                )
+
+        gen_log = logging.getLogger("color_image_gen")
+        gen_log.setLevel(logging.INFO)
+        gen_log.propagate = False
+        # Clear handlers from any previous click so we don't duplicate lines.
+        for _h in list(gen_log.handlers):
+            gen_log.removeHandler(_h)
+        _handler = _SessionLogHandler()
+        _handler.setFormatter(logging.Formatter("%(message)s"))
+        gen_log.addHandler(_handler)
+
+        result = None
+        try:
+            result = make_color_image(
+                obs_dir=obs_dir_path,
+                target=selected_obs,
+                min_level=float(new_config["color_image_min_level"]),
+                max_quantile=float(new_config["color_image_max_quantile"]),
+                gamma=float(new_config["color_image_gamma"]),
+                filter_hues=new_hues,
+                subtract_sky_per_filter=bool(new_config["color_image_subtract_sky"]),
+                log=gen_log,
+            )
+            st.session_state["color_image_gen_state"] = "complete"
+            gen_status.update(
+                label="Color image generation finished.", state="complete"
+            )
+        except Exception as exc:
+            st.session_state["color_image_gen_state"] = "error"
+            gen_status.update(
+                label=f"Color image generation failed: {exc}", state="error"
+            )
+
+    if result is not None:
+        preview = result.get("preview")
+        if preview and Path(preview).exists():
+            st.session_state[f"color_preview_{selected_obs}"] = str(preview)
+            session_preview = str(preview)
+        if result.get("tiff"):
+            st.success(f"Saved color TIFF to `{result['tiff']}`")
+        per_filter = result.get("per_filter_tiffs", {})
+        sky_levels = result.get("sky_levels", {}) or {}
+        if per_filter:
+            with st.expander(f"Per-filter stretched TIFFs ({len(per_filter)})"):
+                for filt, path in per_filter.items():
+                    if filt in sky_levels:
+                        st.code(
+                            f"{filt}  sky={sky_levels[filt]:+.5f}  {path}",
+                            language=None,
+                        )
+                    else:
+                        st.code(f"{filt}: {path}", language=None)
+
+elif st.session_state.get("color_image_gen_log"):
+    # Replay the previous run's log so the user can still review it after
+    # interacting with other widgets (which causes Streamlit to rerun).
+    _last_state = st.session_state.get("color_image_gen_state", "complete")
+    if _last_state == "error":
+        _label, _st_state = "Last color image run — failed.", "error"
+    else:
+        _label, _st_state = "Last color image run — finished.", "complete"
+    with st.status(_label, expanded=False, state=_st_state):
+        st.code(
+            "\n".join(st.session_state["color_image_gen_log"]),
+            language=None,
+        )
+
+# Toggle-controlled preview render. Falls back to the canonical disk path
+# so previews written by the in-pipeline color step appear without needing
+# the user to click "Generate".
+if show_preview:
+    preview_to_show = session_preview or (
+        str(preview_disk_path) if preview_disk_path else None
+    )
+    if preview_to_show and Path(preview_to_show).exists():
+        st.image(
+            preview_to_show,
+            caption=f"Color image preview — {selected_obs}",
+            width=600,
+        )
+    else:
+        st.info(
+            "No color image preview available yet. Run the pipeline with "
+            "`color_image_enabled` on, or click **Generate color image now**."
+        )
+
+
+# Preserve any keys we didn't render so we don't accidentally drop them.
+for key, value in current.items():
+    if key not in new_config:
+        new_config[key] = value
+
+
+st.divider()
+
+errors, warnings = validate_config(new_config)
+for message in warnings:
+    st.warning(message)
+for message in errors:
+    st.error(message)
+
+current_run = load_run(REPO_ROOT)
+run_in_progress = current_run is not None and current_run.running
+
+st.markdown(
+    "**Check setup** takes a few seconds and processes nothing. It reads the data "
+    "headers and checks the environment, output location, wisp templates, CRDS "
+    "reference files, and the stage 3 grid, then reports problems and warnings. "
+    "Do this first, especially with new data or a new machine."
+)
+st.markdown(
+    "**Save & Run pipeline** writes config.yaml, runs the same check, and starts "
+    "the reduction only if it finds no problems. Warnings show the report and ask "
+    "you to confirm."
+)
+st.markdown(
+    "The run is a detached process: it keeps going if you close the browser or "
+    "disconnect from the server, and its log shows below."
+)
+
+with st.container(horizontal=True, gap="small"):
+    check_clicked = st.button(
+        "Check setup",
+        disabled=run_in_progress,
+        help="Save config.yaml and run the setup checks without starting anything.",
+    )
+    run_clicked = st.button(
+        "Save & Run pipeline ▶",
+        type="primary",
+        disabled=run_in_progress,
+        help="Save config.yaml, run the setup checks, and start the reduction if they pass.",
+    )
+    save_clicked = st.button("Save only", help="Write config.yaml without checking or running.")
+    reset_clicked = st.button(
+        "Reset to defaults",
+        disabled=run_in_progress,
+        help=f"Delete {CONFIG_PATH.name} and reload every setting from {DEFAULT_CONFIG_PATH.name}.",
+    )
+if save_clicked:
+    save_config(new_config)
+    st.success(f"Saved {CONFIG_PATH}")
+if reset_clicked:
+    CONFIG_PATH.unlink(missing_ok=True)
+    st.session_state.clear()
+    st.rerun()
+if run_in_progress:
+    st.caption("A run is in progress. Stop it below before starting another.")
+
+
+def _start_full_run(config_to_run: dict) -> None:
+    save_config(config_to_run)
+    st.session_state.pop("preflight", None)
+    st.session_state.pop("preflight_wants_run", None)
+    start_run(REPO_ROOT, PIPELINE_SCRIPT, CONFIG_PATH)
+    st.rerun()
+
+
+# Pipeline output renders here, OUTSIDE the column layout, so it uses the full page width.
+if (check_clicked or run_clicked) and not run_in_progress:
+    save_config(new_config)
+    with st.spinner("Checking environment, data, CRDS reference files, and settings…"):
+        st.session_state["preflight"] = run_preflight(new_config, REPO_ROOT)
+    st.session_state["preflight_wants_run"] = bool(run_clicked)
+    if run_clicked and all(c.status == "ok" for c in st.session_state["preflight"]):
+        _start_full_run(new_config)
+
+if "preflight" in st.session_state and not run_in_progress:
+    _checks = st.session_state["preflight"]
+    _n_fail = sum(c.status == "fail" for c in _checks)
+    _n_warn = sum(c.status == "warn" for c in _checks)
+    _n_ok = len(_checks) - _n_fail - _n_warn
+    _label = f"Setup check: {_n_ok} passed, {_n_warn} warning(s), {_n_fail} problem(s)"
+    with st.status(_label, expanded=True, state="error" if _n_fail else "complete"):
+        _icons = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
+        for c in _checks:
+            st.markdown(f"{_icons[c.status]} **{c.name}** — {c.detail}")
+        if _n_fail:
+            st.error("Fix the problems above, then check again or press Save & Run pipeline.")
+        elif _n_warn:
+            if st.session_state.get("preflight_wants_run"):
+                st.warning("The run was not started because of the warnings above. Read them, then confirm.")
+            else:
+                st.warning("Warnings do not block the run, but read them first.")
+            if st.button("Run anyway ▶", type="primary", key="run_after_check"):
+                _start_full_run(new_config)
+        else:
+            if st.button("Run full pipeline now ▶", type="primary", key="run_after_check"):
+                _start_full_run(new_config)
+
+render_run_panel(new_config)

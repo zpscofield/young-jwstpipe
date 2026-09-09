@@ -28,3 +28,9 @@ data/
 
 # Detached pipeline run state and log (see utils/pipeline_run.py)
 .pipeline_run/
+
+# Run outputs that land in the repo when output_directory is "." (default run
+# name, test runs, and the colour image folder inside any observation)
+Custom_Observation*/
+*_test/
+color/

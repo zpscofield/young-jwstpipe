@@ -52,7 +52,7 @@ CONFIG_LAYOUT = [
         "reference_filter", "mosaic_footprint",
         "pixel_scale", "pixfrac", "rotation", "res_kernel", "resample_in_memory",
         "outlier_in_memory", "external_reference", "starfinder", "snr_threshold",
-        "abs_fitgeometry", "fitgeometry", "skymethod",
+        "abs_fitgeometry", "abs_tolerance", "fitgeometry", "skymethod",
     ]),
     ("Pipeline step overrides", [
         "stage1_step_overrides", "stage2_step_overrides", "stage3_step_overrides",

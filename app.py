@@ -1681,6 +1681,19 @@ with col_t2:
             _get(current, "fitgeometry", "rshift")
         ),
     )
+    new_config["abs_tolerance"] = st.number_input(
+        "abs_tolerance (arcsec)",
+        min_value=0.01,
+        max_value=5.0,
+        value=float(_get(current, "abs_tolerance", 0.1)),
+        step=0.05,
+        format="%.2f",
+        help=(
+            "Matching radius between detected sources and the external "
+            "reference catalog. The jwst default of 0.7 arcsec has proven "
+            "too loose at times."
+        ),
+    )
 st.markdown("**Skymatch**")
 new_config["skymethod"] = st.selectbox(
     "skymethod",

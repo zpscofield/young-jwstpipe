@@ -118,6 +118,7 @@ external_reference: GAIADR3
 starfinder: segmentation
 snr_threshold: 5.0
 abs_fitgeometry: rshift
+abs_tolerance: 0.1
 fitgeometry: rshift
 skymethod: match
 

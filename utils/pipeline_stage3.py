@@ -325,6 +325,9 @@ def stage3(filter_dir, log, target, input_paths, reference_catalog=None, resampl
                 'snr_threshold': config['snr_threshold'],
                 'abs_refcat': reference_catalog,
                 'abs_fitgeometry': config['abs_fitgeometry'],
+                # Matching radius against the external catalog. The jwst
+                # default (0.7 arcsec) fails on our data; 0.1 arcsec works.
+                'abs_tolerance': config.get('abs_tolerance', 0.1),
                 'fitgeometry': config['fitgeometry'],
             }
         }

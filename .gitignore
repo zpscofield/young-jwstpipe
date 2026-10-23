@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# JWST pipeline run outputs
+Output_*/
+[0-9][0-9][0-9][0-9][0-9]/
+stage1_output/
+stage2_output/
+stage3_output/
+logs/
+
+# Downloaded uncal files end up here; never commit them
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# The user's settings; config.default.yaml is the tracked template
+/config.yaml
+
+# Streamlit state
+.streamlit/secrets.toml
+.streamlit/.*.log
+
+# Detached pipeline run state and log (see utils/pipeline_run.py)
+.pipeline_run/
+
+# Run outputs that land in the repo when output_directory is "." (default run
+# name, test runs, and the colour image folder inside any observation)
+Custom_Observation*/
+*_test/
+color/

@@ -60,6 +60,8 @@ from photutils.segmentation import detect_sources, detect_threshold
 from scipy.ndimage import binary_dilation, generate_binary_structure
 from tqdm.auto import tqdm
 
+from log_utils import archive_existing_log
+
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
@@ -69,7 +71,8 @@ def setup_logger(output_dir):
     """
     parent_dir = os.path.dirname(output_dir)
     log_file_path = os.path.join(parent_dir, "logs/pipeline_wisp.log")
-    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)  # Ensure log directory exists
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+    archive_existing_log(log_file_path)
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     log = logging.getLogger(__name__)
@@ -578,34 +581,36 @@ def parse_args():
     parser.add_argument('--nproc', dest='nproc', action='store', type=int, required=False, help=nproc_help, default=6)
     parser.add_argument('--output_dir', dest='output_dir', action='store', type=str, required=False, help=output_dir_help, default='./')
     parser.add_argument('--wisp_dir', dest='wisp_dir', action='store', type=str, required=False, help=wisp_dir_help, default='./')
-    parser.add_argument('--create_segmap', dest='create_segmap', action=argparse.BooleanOptionalAction, required=False, help=create_segmap_help, default=True)
-    
-    # Add arguments for make_segmap()
-    parser.add_argument('--seg_from_lw', dest='seg_from_lw', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--sigma', dest='sigma', action='store', type=float, required=False, default=0.8)
-    parser.add_argument('--npixels', dest='npixels', action='store', type=int, required=False, default=10)
-    parser.add_argument('--dilate_segmap', dest='dilate_segmap', action='store', type=int, required=False, default=5)
-    parser.add_argument('--save_segmap', dest='save_segmap', action=argparse.BooleanOptionalAction, required=False, default=False)
+    parser.add_argument('--create_segmap', dest='create_segmap', action=argparse.BooleanOptionalAction, required=False, help=create_segmap_help, default=config.get('wisp_create_segmap', True))
+
+    # Add arguments for make_segmap(). Defaults come from config.yaml when
+    # present (set via the Streamlit UI) and otherwise fall back to the
+    # original hardcoded values, so behaviour is unchanged unless overridden.
+    parser.add_argument('--seg_from_lw', dest='seg_from_lw', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_seg_from_lw', True))
+    parser.add_argument('--sigma', dest='sigma', action='store', type=float, required=False, default=config.get('wisp_sigma', 0.8))
+    parser.add_argument('--npixels', dest='npixels', action='store', type=int, required=False, default=config.get('wisp_npixels', 10))
+    parser.add_argument('--dilate_segmap', dest='dilate_segmap', action='store', type=int, required=False, default=config.get('wisp_dilate_segmap', 5))
+    parser.add_argument('--save_segmap', dest='save_segmap', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_save_segmap', False))
 
     # Add arguments for subtract_wisp()
-    parser.add_argument('--sub_wisp', dest='sub_wisp', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--gauss_smooth_wisp', dest='gauss_smooth_wisp', action=argparse.BooleanOptionalAction, required=False, default=False)
-    parser.add_argument('--gauss_stddev', dest='gauss_stddev', action='store', type=float, required=False, default=3.0)
-    parser.add_argument('--scale_wisp', dest='scale_wisp', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--scale_method', dest='scale_method', action='store', type=str, required=False, default='mad')
-    parser.add_argument('--poly_degree', dest='poly_degree', action='store', type=int, required=False, default=5)
-    parser.add_argument('--factor_min', dest='factor_min', action='store', type=float, required=False, default=0.0)
-    parser.add_argument('--factor_max', dest='factor_max', action='store', type=float, required=False, default=2.0)
-    parser.add_argument('--factor_step', dest='factor_step', action='store', type=float, required=False, default=0.01)
-    parser.add_argument('--min_wisp', dest='min_wisp', action='store', type=float, required=False, default=None)
-    parser.add_argument('--flag_wisp_thresh', dest='flag_wisp_thresh', action='store', type=float, required=False, default=None)
-    parser.add_argument('--dq_val', dest='dq_val', action='store', type=int, required=False, default=1)
-    parser.add_argument('--correct_rows', dest='correct_rows', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--correct_cols', dest='correct_cols', action=argparse.BooleanOptionalAction, required=False, default=False)
+    parser.add_argument('--sub_wisp', dest='sub_wisp', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_sub_wisp', True))
+    parser.add_argument('--gauss_smooth_wisp', dest='gauss_smooth_wisp', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_gauss_smooth_wisp', False))
+    parser.add_argument('--gauss_stddev', dest='gauss_stddev', action='store', type=float, required=False, default=config.get('wisp_gauss_stddev', 3.0))
+    parser.add_argument('--scale_wisp', dest='scale_wisp', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_scale_wisp', True))
+    parser.add_argument('--scale_method', dest='scale_method', action='store', type=str, required=False, default=config.get('wisp_scale_method', 'mad'))
+    parser.add_argument('--poly_degree', dest='poly_degree', action='store', type=int, required=False, default=config.get('wisp_poly_degree', 5))
+    parser.add_argument('--factor_min', dest='factor_min', action='store', type=float, required=False, default=config.get('wisp_factor_min', 0.0))
+    parser.add_argument('--factor_max', dest='factor_max', action='store', type=float, required=False, default=config.get('wisp_factor_max', 2.0))
+    parser.add_argument('--factor_step', dest='factor_step', action='store', type=float, required=False, default=config.get('wisp_factor_step', 0.01))
+    parser.add_argument('--min_wisp', dest='min_wisp', action='store', type=float, required=False, default=config.get('wisp_min_wisp', None))
+    parser.add_argument('--flag_wisp_thresh', dest='flag_wisp_thresh', action='store', type=float, required=False, default=config.get('wisp_flag_wisp_thresh', None))
+    parser.add_argument('--dq_val', dest='dq_val', action='store', type=int, required=False, default=config.get('wisp_dq_val', 1))
+    parser.add_argument('--correct_rows', dest='correct_rows', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_correct_rows', True))
+    parser.add_argument('--correct_cols', dest='correct_cols', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_correct_cols', False))
     parser.add_argument('--save_data', dest='save_data', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--save_model', dest='save_model', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--plot', dest='plot', action=argparse.BooleanOptionalAction, required=False, default=True)
-    parser.add_argument('--show_plot', dest='show_plot', action=argparse.BooleanOptionalAction, required=False, default=False)
+    parser.add_argument('--save_model', dest='save_model', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_save_model', True))
+    parser.add_argument('--plot', dest='plot', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_plot', True))
+    parser.add_argument('--show_plot', dest='show_plot', action=argparse.BooleanOptionalAction, required=False, default=config.get('wisp_show_plot', False))
     parser.add_argument('--suffix', dest='suffix', action='store', type=str, required=False, default='_wisp')
 
     # Get the arguments

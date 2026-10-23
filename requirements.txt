@@ -1,0 +1,12 @@
+astropy
+astroquery
+jwst
+matplotlib
+numpy
+photutils
+Pillow
+pyyaml
+requests
+scipy
+streamlit
+tqdm
